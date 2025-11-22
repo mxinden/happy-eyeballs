@@ -300,7 +300,7 @@ impl HappyEyeballs {
                         record_type: DnsRecordType::A,
                     })
                 } else {
-                    unreachable!("TODO improve");
+                    None
                 }
             }
             State::Connecting => None,
@@ -364,12 +364,59 @@ impl HappyEyeballs {
             https_response,
             aaaa_response,
             a_response,
-        } = &mut self.state
+        } = &self.state
         else {
             return None;
         };
 
-        todo!();
+        // > Some positive (non-empty) address answers have been received AND
+        //
+        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+        match (&aaaa_response, &a_response) {
+            (Some(Some(Some(_))), _) | (Some(Some(Some(_))), _) => {}
+            _ => return None,
+        }
+
+        // > A postive (non-empty) or negative (empty) answer has been received for the preferred address family that was queried AND
+        //
+        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+        match (&self.network_config, &aaaa_response, &a_response) {
+            (NetworkConfig::Ipv4Only, _, Some(Some(_))) => {}
+            (NetworkConfig::Ipv6Only { .. }, Some(Some(_)), _) => {}
+            (NetworkConfig::DualStack { prefer_ipv6: false }, _, Some(Some(_))) => {}
+            (NetworkConfig::DualStack { prefer_ipv6: true }, Some(Some(_)), _) => {}
+            _ => return None,
+        }
+
+        // > SVCB/HTTPS service information has been received (or has received a negative response)
+        //
+        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+        if !matches!(https_response, Some(Some(_))) {
+            return None;
+        }
+
+        let use_v6 = match self.network_config {
+            NetworkConfig::DualStack { prefer_ipv6 } => prefer_ipv6,
+            NetworkConfig::Ipv6Only { .. } => true,
+            NetworkConfig::Ipv4Only => false,
+        };
+
+        let address = match (use_v6, &aaaa_response, &a_response) {
+            (true, Some(Some(Some(addresses))), _) => {
+                SocketAddr::new(IpAddr::V6(addresses[0]), self.target.1)
+            }
+            (false, _, Some(Some(Some(addresses)))) => {
+                SocketAddr::new(IpAddr::V4(addresses[0]), self.target.1)
+            }
+            _ => return None,
+        };
+
+        self.state = State::Connecting;
+
+        return Some(Output::AttemptConnection {
+            address,
+            protocol_info: None,
+        });
     }
 }
 
