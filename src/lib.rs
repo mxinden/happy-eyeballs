@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
     /// DNS query result received
-    DnsResult(DnsResult),
+    DnsResponse(DnsResponse),
 
     /// DNS query failed
     DnsError {
@@ -66,17 +66,31 @@ pub enum Input {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum DnsResult {
-    Https {
+pub enum DnsResponse {
+    Https(DnsHttpsResponse),
+    Aaaa(DnsAaaaResponse),
+    A(DnsAResponse),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DnsHttpsResponse {
+    Positive {
         addresses: Vec<IpAddr>,
         service_info: Option<ServiceInfo>,
     },
-    Aaaa {
-        addresses: Vec<Ipv6Addr>,
-    },
-    A {
-        addresses: Vec<Ipv4Addr>,
-    },
+    Negative,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DnsAaaaResponse {
+    Positive { addresses: Vec<Ipv6Addr> },
+    Negative,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DnsAResponse {
+    Positive { addresses: Vec<Ipv4Addr> },
+    Negative,
 }
 
 /// Output events from the Happy Eyeballs state machine
@@ -158,26 +172,14 @@ pub struct ProtocolInfo {
 #[derive(Debug, Clone, PartialEq)]
 enum State {
     /// Performing DNS resolution
-    Resolving(ResolvingState),
+    Resolving {
+        // TODO: Option<Option<Option<_>>> isn't ideal. Refactor?
+        https_response: Option<Option<Option<()>>>,
+        aaaa_response: Option<Option<Option<Vec<Ipv6Addr>>>>,
+        a_response: Option<Option<Option<Vec<Ipv4Addr>>>>,
+    },
     /// Attempting connections
     Connecting,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum ResolvingState {
-    Initial,
-    Https {
-        https_response: Option<()>,
-    },
-    Aaaa {
-        https_response: Option<()>,
-        aaaa_response: Option<Vec<Ipv6Addr>>,
-    },
-    A {
-        https_response: Option<()>,
-        aaaa_response: Option<Vec<Ipv6Addr>>,
-        a_response: Option<Vec<Ipv4Addr>>,
-    },
 }
 
 /// Network configuration for Happy Eyeballs behavior
@@ -228,7 +230,11 @@ impl HappyEyeballs {
         network_config: NetworkConfig,
     ) -> Self {
         Self {
-            state: State::Resolving(ResolvingState::Initial),
+            state: State::Resolving {
+                https_response: None,
+                aaaa_response: None,
+                a_response: None,
+            },
             network_config,
             target: (hostname, port),
         }
@@ -242,106 +248,128 @@ impl HappyEyeballs {
     /// The caller should keep calling `process(None)` until it returns `Output::None`
     /// or a timer output, then wait for the corresponding input before continuing.
     pub fn process(&mut self, input: Option<Input>, now: Instant) -> Option<Output> {
-        match (&mut self.state, input) {
-            (State::Resolving(ResolvingState::Initial), None) => {
-                self.state = State::Resolving(ResolvingState::Https {
-                    https_response: None,
-                });
-
-                return Some(Output::SendDnsQuery {
-                    hostname: self.target.0.clone(),
-                    record_type: DnsRecordType::Https,
-                });
+        // Handle input.
+        let output = match (&mut self.state, input) {
+            (State::Resolving { .. }, Some(Input::DnsResponse(response))) => {
+                self.on_dns_response(response)
             }
-            (State::Resolving(ResolvingState::Https { https_response }), None) => {
-                self.state = State::Resolving(ResolvingState::Aaaa {
-                    // TODO: Not ideal. Can we do better?
-                    https_response: https_response.take(),
-                    aaaa_response: None,
-                });
-
-                return Some(Output::SendDnsQuery {
-                    hostname: self.target.0.clone(),
-                    record_type: DnsRecordType::Aaaa,
-                });
-            }
-            (
-                State::Resolving(ResolvingState::Aaaa {
-                    https_response,
-                    aaaa_response,
-                }),
-                None,
-            ) => {
-                self.state = State::Resolving(ResolvingState::A {
-                    // TODO: Not ideal. Can we do better?
-                    https_response: https_response.take(),
-                    aaaa_response: aaaa_response.take(),
-                    a_response: None,
-                });
-
-                return Some(Output::SendDnsQuery {
-                    hostname: self.target.0.clone(),
-                    record_type: DnsRecordType::A,
-                });
-            }
-            (State::Resolving(resolving_state), Some(input)) => {
-                match (&mut *resolving_state, input) {
-                    (ResolvingState::Initial, _) => unreachable!(),
-                    (
-                        ResolvingState::Https { https_response }
-                        | ResolvingState::Aaaa { https_response, .. }
-                        | ResolvingState::A { https_response, .. },
-                        Input::DnsResult(DnsResult::Https { .. }),
-                    ) => {
-                        *https_response = Some(());
-                    }
-                    (
-                        ResolvingState::Aaaa { aaaa_response, .. }
-                        | ResolvingState::A { aaaa_response, .. },
-                        Input::DnsResult(DnsResult::Aaaa { addresses }),
-                    ) => {
-                        *aaaa_response = Some(addresses);
-                    }
-                    _ => todo!(),
-                };
-
-                match resolving_state {
-                    ResolvingState::Aaaa {
-                        https_response: Some(_),
-                        aaaa_response: Some(_),
-                    }
-                    | ResolvingState::A {
-                        https_response: Some(_),
-                        aaaa_response: Some(_),
-                        ..
-                    } => {
-                        return self.sorting();
-                    }
-                    _ => {}
-                }
-            }
-
-            _ => todo!(),
+            _ => None,
+        };
+        if output.is_some() {
+            return output;
         }
 
-        return None;
+        // Send DNS queries.
+        let output = self.send_dns_request();
+        if output.is_some() {
+            return output;
+        }
+
+        // Attempt connections.
+        let output = self.connection_attempt();
+        if output.is_some() {
+            return output;
+        }
+
+        None
     }
 
-    fn sorting(&mut self) -> Option<Output> {
-        let addresses = match std::mem::replace(&mut self.state, State::Connecting) {
-            State::Resolving(
-                ResolvingState::Aaaa { aaaa_response, .. }
-                | ResolvingState::A { aaaa_response, .. },
-            ) => aaaa_response.unwrap(),
-            _ => todo!(),
+    fn send_dns_request(&mut self) -> Option<Output> {
+        match &mut self.state {
+            State::Resolving {
+                https_response,
+                aaaa_response,
+                a_response,
+            } => {
+                if https_response.is_none() {
+                    *https_response = Some(None);
+                    Some(Output::SendDnsQuery {
+                        hostname: self.target.0.clone(),
+                        record_type: DnsRecordType::Https,
+                    })
+                } else if aaaa_response.is_none() {
+                    *aaaa_response = Some(None);
+                    Some(Output::SendDnsQuery {
+                        hostname: self.target.0.clone(),
+                        record_type: DnsRecordType::Aaaa,
+                    })
+                } else if a_response.is_none() {
+                    *a_response = Some(None);
+                    Some(Output::SendDnsQuery {
+                        hostname: self.target.0.clone(),
+                        record_type: DnsRecordType::A,
+                    })
+                } else {
+                    unreachable!("TODO improve");
+                }
+            }
+            State::Connecting => None,
+        }
+    }
+
+    fn on_dns_response(&mut self, response: DnsResponse) -> Option<Output> {
+        let State::Resolving {
+            https_response,
+            aaaa_response,
+            a_response,
+        } = &mut self.state
+        else {
+            unreachable!();
         };
-        Some(Output::AttemptConnection {
-            address: SocketAddr::new(
-                IpAddr::V6(addresses.into_iter().next().unwrap()),
-                self.target.1,
-            ),
-            protocol_info: None,
-        })
+
+        match response {
+            DnsResponse::Https(dns_https_response) => {
+                assert_eq!(*https_response, Some(None));
+                match dns_https_response {
+                    DnsHttpsResponse::Positive {
+                        addresses: _,
+                        service_info: _,
+                    } => {
+                        *https_response = Some(Some(Some(())));
+                    }
+                    DnsHttpsResponse::Negative => {
+                        *https_response = Some(Some(None));
+                    }
+                }
+            }
+            DnsResponse::Aaaa(dns_aaaa_response) => {
+                assert_eq!(*aaaa_response, Some(None));
+                match dns_aaaa_response {
+                    DnsAaaaResponse::Positive { addresses } => {
+                        *aaaa_response = Some(Some(Some(addresses)));
+                    }
+                    DnsAaaaResponse::Negative => {
+                        *aaaa_response = Some(Some(None));
+                    }
+                }
+            }
+            DnsResponse::A(dns_aresponse) => {
+                assert_eq!(*a_response, Some(None));
+                match dns_aresponse {
+                    DnsAResponse::Positive { addresses } => {
+                        *a_response = Some(Some(Some(addresses)));
+                    }
+                    DnsAResponse::Negative => {
+                        *a_response = Some(Some(None));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn connection_attempt(&mut self) -> Option<Output> {
+        let State::Resolving {
+            https_response,
+            aaaa_response,
+            a_response,
+        } = &mut self.state
+        else {
+            return None;
+        };
+
+        todo!();
     }
 }
 
@@ -440,22 +468,33 @@ mod tests {
         fn dont_wait_for_all_dns_answers() {
             let (now, mut he) = setup();
 
+            // Send all DNS queries.
             for _ in 0..3 {
-                he.process(None, now); // Send all DNS queries
+                he.process(None, now);
             }
 
             assert_eq!(
-                he.process(Some(Input::DnsResult(DnsResult::Https {
-                    addresses: vec![],
-                    service_info: None,
-                })), now),
+                he.process(
+                    Some(Input::DnsResponse(DnsResponse::Https(
+                        DnsHttpsResponse::Positive {
+                            addresses: vec![],
+                            service_info: None
+                        }
+                    ))),
+                    now
+                ),
                 None
             );
 
             assert_eq!(
-                he.process(Some(Input::DnsResult(DnsResult::Aaaa {
-                    addresses: vec![V6_ADDR],
-                })), now),
+                he.process(
+                    Some(Input::DnsResponse(DnsResponse::Aaaa(
+                        DnsAaaaResponse::Positive {
+                            addresses: vec![V6_ADDR]
+                        }
+                    ))),
+                    now
+                ),
                 Some(Output::AttemptConnection {
                     address: SocketAddr::new(V6_ADDR.into(), PORT),
                     protocol_info: None,
@@ -464,7 +503,9 @@ mod tests {
         }
 
         /// > The client moves onto sorting addresses and establishing
-        /// > connections once one of the following condition sets is met:Either:
+        /// > connections once one of the following condition sets is met:
+        /// >
+        /// > Either:
         /// >
         /// > - Some positive (non-empty) address answers have been received AND
         /// > - A postive (non-empty) or negative (empty) answer has been
@@ -476,7 +517,13 @@ mod tests {
         #[ignore]
         fn move_on_non_timeout() {
             let (now, mut he) = setup();
-            todo!()
+
+            // Send all DNS queries.
+            for _ in 0..3 {
+                he.process(None, now);
+            }
+
+            todo!();
         }
 
         /// > Or:
