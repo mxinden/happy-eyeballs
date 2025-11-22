@@ -33,24 +33,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
-/// Resolution Delay - time to wait for AAAA after receiving A record
-pub const RESOLUTION_DELAY: Duration = Duration::from_millis(50);
-
-/// Connection Attempt Delay - time between connection attempts
-pub const CONNECTION_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
-
-/// Minimum Connection Attempt Delay (must be >= 10ms)
-pub const MIN_CONNECTION_ATTEMPT_DELAY: Duration = Duration::from_millis(100);
-
-/// Maximum Connection Attempt Delay
-pub const MAX_CONNECTION_ATTEMPT_DELAY: Duration = Duration::from_secs(2);
-
-/// Last Resort Local Synthesis Delay
-pub const LAST_RESORT_SYNTHESIS_DELAY: Duration = Duration::from_secs(2);
-
-/// Preferred Address Family Count
-pub const PREFERRED_ADDRESS_FAMILY_COUNT: usize = 1;
-
 /// Input events to the Happy Eyeballs state machine
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
@@ -259,7 +241,7 @@ impl HappyEyeballs {
     ///
     /// The caller should keep calling `process(None)` until it returns `Output::None`
     /// or a timer output, then wait for the corresponding input before continuing.
-    pub fn process(&mut self, input: Option<Input>) -> Option<Output> {
+    pub fn process(&mut self, input: Option<Input>, now: Instant) -> Option<Output> {
         match (&mut self.state, input) {
             (State::Resolving(ResolvingState::Initial), None) => {
                 self.state = State::Resolving(ResolvingState::Https {
@@ -382,11 +364,8 @@ mod tests {
     fn initial_state() {
         let (now, mut he) = setup();
 
-        // Process without input should start the connection process
-        let output = he.process(None);
-
-        // Should immediately start with DNS query
-        match output {
+        // Should immediately start with DNS query.
+        match he.process(None, now) {
             Some(Output::SendDnsQuery {
                 hostname,
                 record_type,
@@ -394,7 +373,7 @@ mod tests {
                 assert_eq!(hostname, "example.com");
                 assert_eq!(record_type, DnsRecordType::Https);
             }
-            _ => panic!("Expected SendDnsQuery output, got: {:?}", output),
+            _ => panic!("Expected SendDnsQuery output"),
         }
     }
 
@@ -419,7 +398,7 @@ mod tests {
         fn sendig_dns_queries() {
             let (now, mut he) = setup();
 
-            match he.process(None) {
+            match he.process(None, now) {
                 Some(Output::SendDnsQuery {
                     hostname,
                     record_type,
@@ -430,7 +409,7 @@ mod tests {
                 _ => panic!("Expected HTTPS query initially"),
             }
 
-            match he.process(None) {
+            match he.process(None, now) {
                 Some(Output::SendDnsQuery {
                     hostname,
                     record_type,
@@ -441,7 +420,7 @@ mod tests {
                 _ => panic!(),
             }
 
-            match he.process(None) {
+            match he.process(None, now) {
                 Some(Output::SendDnsQuery {
                     hostname,
                     record_type,
@@ -462,21 +441,21 @@ mod tests {
             let (now, mut he) = setup();
 
             for _ in 0..3 {
-                he.process(None); // Send all DNS queries
+                he.process(None, now); // Send all DNS queries
             }
 
             assert_eq!(
                 he.process(Some(Input::DnsResult(DnsResult::Https {
                     addresses: vec![],
                     service_info: None,
-                }))),
+                })), now),
                 None
             );
 
             assert_eq!(
                 he.process(Some(Input::DnsResult(DnsResult::Aaaa {
                     addresses: vec![V6_ADDR],
-                }))),
+                })), now),
                 Some(Output::AttemptConnection {
                     address: SocketAddr::new(V6_ADDR.into(), PORT),
                     protocol_info: None,
