@@ -172,7 +172,6 @@ pub struct ProtocolInfo {
     pub service_priority: Option<u16>,
 }
 
-
 /// State of the Happy Eyeballs algorithm
 #[derive(Debug, Clone, PartialEq)]
 enum State {
@@ -190,12 +189,12 @@ enum ResolvingState {
     },
     Aaaa {
         https_response: Option<()>,
-        aaaa_response: Option<()>,
+        aaaa_response: Option<Vec<Ipv6Addr>>,
     },
     A {
         https_response: Option<()>,
-        aaaa_response: Option<()>,
-        a_response: Option<()>,
+        aaaa_response: Option<Vec<Ipv6Addr>>,
+        a_response: Option<Vec<Ipv4Addr>>,
     },
 }
 
@@ -317,21 +316,21 @@ impl HappyEyeballs {
                     (
                         ResolvingState::Aaaa { aaaa_response, .. }
                         | ResolvingState::A { aaaa_response, .. },
-                        Input::DnsResult(DnsResult::Aaaa { .. }),
+                        Input::DnsResult(DnsResult::Aaaa { addresses }),
                     ) => {
-                        *aaaa_response = Some(());
+                        *aaaa_response = Some(addresses);
                     }
                     _ => todo!(),
                 };
 
                 match resolving_state {
                     ResolvingState::Aaaa {
-                        https_response: Some(()),
-                        aaaa_response: Some(()),
+                        https_response: Some(_),
+                        aaaa_response: Some(_),
                     }
                     | ResolvingState::A {
-                        https_response: Some(()),
-                        aaaa_response: Some(()),
+                        https_response: Some(_),
+                        aaaa_response: Some(_),
                         ..
                     } => {
                         return self.sorting();
@@ -347,9 +346,18 @@ impl HappyEyeballs {
     }
 
     fn sorting(&mut self) -> Option<Output> {
-        self.state = State::Connecting;
+        let addresses = match std::mem::replace(&mut self.state, State::Connecting) {
+            State::Resolving(
+                ResolvingState::Aaaa { aaaa_response, .. }
+                | ResolvingState::A { aaaa_response, .. },
+            ) => aaaa_response.unwrap(),
+            _ => todo!(),
+        };
         Some(Output::AttemptConnection {
-            address: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), self.target.1),
+            address: SocketAddr::new(
+                IpAddr::V6(addresses.into_iter().next().unwrap()),
+                self.target.1,
+            ),
             protocol_info: None,
         })
     }
