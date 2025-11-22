@@ -1,5 +1,5 @@
 //! # Happy Eyeballs v3 Implementation
-//! 
+//!
 //! WORK IN PROGRESS
 //!
 //! This crate provides a pure state machine implementation of Happy Eyeballs v3
@@ -172,30 +172,14 @@ pub struct ProtocolInfo {
     pub service_priority: Option<u16>,
 }
 
-/// Connection attempt state
-#[derive(Debug, Clone, PartialEq)]
-struct ConnectionAttempt {
-    address: SocketAddr,
-    protocol_info: Option<ProtocolInfo>,
-    started_at: Instant,
-    in_progress: bool,
-}
 
 /// State of the Happy Eyeballs algorithm
 #[derive(Debug, Clone, PartialEq)]
 enum State {
     /// Performing DNS resolution
     Resolving(ResolvingState),
-    /// Sorting resolved addresses according to preferences
-    Sorting,
-    /// Have some addresses, waiting for more or timeout
-    WaitingForMoreAddresses,
     /// Attempting connections
     Connecting,
-    /// Successfully connected
-    Connected,
-    /// Failed to connect
-    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,23 +190,13 @@ enum ResolvingState {
     },
     Aaaa {
         https_response: Option<()>,
-        aaa_response: Option<()>,
+        aaaa_response: Option<()>,
     },
     A {
         https_response: Option<()>,
-        aaa_response: Option<()>,
+        aaaa_response: Option<()>,
         a_response: Option<()>,
     },
-}
-
-/// Resolved address with associated metadata
-#[derive(Debug, Clone, PartialEq)]
-struct ResolvedAddress {
-    address: IpAddr,
-    port: u16,
-    service_info: Option<ServiceInfo>,
-    /// Destination Address Selection preference order
-    preference_order: usize,
 }
 
 /// Network configuration for Happy Eyeballs behavior
@@ -257,8 +231,6 @@ pub struct HappyEyeballs {
     // TODO: Split in host and port?
     /// Target hostname and port
     target: (String, u16),
-    /// DNS queries that have been sent
-    pending_dns_queries: std::collections::HashSet<DnsRecordType>,
 }
 
 impl HappyEyeballs {
@@ -278,7 +250,6 @@ impl HappyEyeballs {
             state: State::Resolving(ResolvingState::Initial),
             network_config,
             target: (hostname, port),
-            pending_dns_queries: std::collections::HashSet::new(),
         }
     }
 
@@ -290,16 +261,8 @@ impl HappyEyeballs {
     /// The caller should keep calling `process(None)` until it returns `Output::None`
     /// or a timer output, then wait for the corresponding input before continuing.
     pub fn process(&mut self, input: Option<Input>) -> Option<Output> {
-        match (&self.state, input) {
-            // Start input is now handled in advance_state_machine
+        match (&mut self.state, input) {
             (State::Resolving(ResolvingState::Initial), None) => {
-                assert!(
-                    self.pending_dns_queries.is_empty(),
-                    "No DNS queries should be pending when starting"
-                );
-                // Start with HTTPS query according to Section 4.1
-                self.pending_dns_queries.insert(DnsRecordType::Https);
-
                 self.state = State::Resolving(ResolvingState::Https {
                     https_response: None,
                 });
@@ -309,19 +272,107 @@ impl HappyEyeballs {
                     record_type: DnsRecordType::Https,
                 });
             }
+            (State::Resolving(ResolvingState::Https { https_response }), None) => {
+                self.state = State::Resolving(ResolvingState::Aaaa {
+                    // TODO: Not ideal. Can we do better?
+                    https_response: https_response.take(),
+                    aaaa_response: None,
+                });
+
+                return Some(Output::SendDnsQuery {
+                    hostname: self.target.0.clone(),
+                    record_type: DnsRecordType::Aaaa,
+                });
+            }
+            (
+                State::Resolving(ResolvingState::Aaaa {
+                    https_response,
+                    aaaa_response,
+                }),
+                None,
+            ) => {
+                self.state = State::Resolving(ResolvingState::A {
+                    // TODO: Not ideal. Can we do better?
+                    https_response: https_response.take(),
+                    aaaa_response: aaaa_response.take(),
+                    a_response: None,
+                });
+
+                return Some(Output::SendDnsQuery {
+                    hostname: self.target.0.clone(),
+                    record_type: DnsRecordType::A,
+                });
+            }
+            (State::Resolving(resolving_state), Some(input)) => {
+                match (&mut *resolving_state, input) {
+                    (ResolvingState::Initial, _) => unreachable!(),
+                    (
+                        ResolvingState::Https { https_response }
+                        | ResolvingState::Aaaa { https_response, .. }
+                        | ResolvingState::A { https_response, .. },
+                        Input::DnsResult(DnsResult::Https { .. }),
+                    ) => {
+                        *https_response = Some(());
+                    }
+                    (
+                        ResolvingState::Aaaa { aaaa_response, .. }
+                        | ResolvingState::A { aaaa_response, .. },
+                        Input::DnsResult(DnsResult::Aaaa { .. }),
+                    ) => {
+                        *aaaa_response = Some(());
+                    }
+                    _ => todo!(),
+                };
+
+                match resolving_state {
+                    ResolvingState::Aaaa {
+                        https_response: Some(()),
+                        aaaa_response: Some(()),
+                    }
+                    | ResolvingState::A {
+                        https_response: Some(()),
+                        aaaa_response: Some(()),
+                        ..
+                    } => {
+                        return self.sorting();
+                    }
+                    _ => {}
+                }
+            }
+
             _ => todo!(),
         }
+
+        return None;
+    }
+
+    fn sorting(&mut self) -> Option<Output> {
+        self.state = State::Connecting;
+        Some(Output::AttemptConnection {
+            address: SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), self.target.1),
+            protocol_info: None,
+        })
     }
 }
 
+// TODO: Given that this does not test the internals, should this be in tests/ instead of src/?
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const HOSTNAME: &str = "example.com";
+    const PORT: u16 = 443;
+    const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+
+    fn setup() -> (Instant, HappyEyeballs) {
+        let now = Instant::now();
+        let he = HappyEyeballs::new(HOSTNAME.to_string(), PORT, now);
+        (now, he)
+    }
+
     #[test]
     fn initial_state() {
-        let now = Instant::now();
-        let mut he = HappyEyeballs::new("example.com".to_string(), 443, now);
+        let (now, mut he) = setup();
 
         // Process without input should start the connection process
         let output = he.process(None);
@@ -339,84 +390,119 @@ mod tests {
         }
     }
 
-    /// > All of the DNS queries SHOULD be made as soon after one another as
-    /// > possible. The order in which the queries are sent SHOULD be as follows
-    /// > (omitting any query that doesn't apply based on the logic described
-    /// > above):
-    /// >
-    /// > 1. SVCB or HTTPS query
-    /// > 2. AAAA query
-    /// > 3. A query
+    /// > 4. Hostname Resolution
     ///
-    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.1>
-    #[test]
-    fn sendig_dns_queries() {
-        let now = Instant::now();
-        let mut he = HappyEyeballs::new("example.com".to_string(), 443, now);
+    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4>
+    #[cfg(test)]
+    mod section_4_hostname_resolution {
+        use super::*;
 
-        match he.process(None) {
-            Some(Output::SendDnsQuery {
-                hostname,
-                record_type,
-            }) => {
-                assert_eq!(hostname, "example.com");
-                assert_eq!(record_type, DnsRecordType::Https);
+        /// > All of the DNS queries SHOULD be made as soon after one another as
+        /// > possible. The order in which the queries are sent SHOULD be as follows
+        /// > (omitting any query that doesn't apply based on the logic described
+        /// > above):
+        /// >
+        /// > 1. SVCB or HTTPS query
+        /// > 2. AAAA query
+        /// > 3. A query
+        ///
+        /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.1>
+        #[test]
+        fn sendig_dns_queries() {
+            let (now, mut he) = setup();
+
+            match he.process(None) {
+                Some(Output::SendDnsQuery {
+                    hostname,
+                    record_type,
+                }) => {
+                    assert_eq!(hostname, HOSTNAME);
+                    assert_eq!(record_type, DnsRecordType::Https);
+                }
+                _ => panic!("Expected HTTPS query initially"),
             }
-            _ => panic!("Expected HTTPS query initially"),
-        }
 
-        match he.process(None) {
-            Some(Output::SendDnsQuery {
-                hostname,
-                record_type,
-            }) => {
-                assert_eq!(hostname, "example.com");
-                assert_eq!(record_type, DnsRecordType::Aaaa);
+            match he.process(None) {
+                Some(Output::SendDnsQuery {
+                    hostname,
+                    record_type,
+                }) => {
+                    assert_eq!(hostname, HOSTNAME);
+                    assert_eq!(record_type, DnsRecordType::Aaaa);
+                }
+                _ => panic!(),
             }
-            _ => panic!(),
-        }
 
-        match he.process(None) {
-            Some(Output::SendDnsQuery {
-                hostname,
-                record_type,
-            }) => {
-                assert_eq!(hostname, "example.com");
-                assert_eq!(record_type, DnsRecordType::A);
+            match he.process(None) {
+                Some(Output::SendDnsQuery {
+                    hostname,
+                    record_type,
+                }) => {
+                    assert_eq!(hostname, HOSTNAME);
+                    assert_eq!(record_type, DnsRecordType::A);
+                }
+                _ => panic!(),
             }
-            _ => panic!(),
-        }
-    }
-
-    /// > Implementations SHOULD NOT wait for all answers to return before
-    /// > starting the next steps of connection establishment.
-    ///
-    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-    #[test]
-    fn dont_wait_for_all_dns_answers() {
-        let now = Instant::now();
-        let mut he = HappyEyeballs::new("example.com".to_string(), 443, now);
-
-        for _ in 0..3 {
-            he.process(None); // Send all DNS queries
         }
 
-        assert_eq!(
-            he.process(Some(Input::DnsResult(DnsResult::Https {
-                addresses: vec![],
-                service_info: None,
-            }))),
-            None
-        );
+        /// > Implementations SHOULD NOT wait for all answers to return before
+        /// > starting the next steps of connection establishment.
+        ///
+        /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+        #[test]
+        fn dont_wait_for_all_dns_answers() {
+            let (now, mut he) = setup();
 
-        assert_eq!(
-            he.process(Some(Input::DnsResult(DnsResult::Aaaa {
-                addresses: vec!["2001:db8::1".parse().unwrap()],
-            }))),
-            Some(Output::AttemptConnection {
-                address: SocketAddr::new("2001:db8::1".parse().unwrap(), 443),
-                protocol_info: None,
-            })
-        );
+            for _ in 0..3 {
+                he.process(None); // Send all DNS queries
+            }
+
+            assert_eq!(
+                he.process(Some(Input::DnsResult(DnsResult::Https {
+                    addresses: vec![],
+                    service_info: None,
+                }))),
+                None
+            );
+
+            assert_eq!(
+                he.process(Some(Input::DnsResult(DnsResult::Aaaa {
+                    addresses: vec![V6_ADDR],
+                }))),
+                Some(Output::AttemptConnection {
+                    address: SocketAddr::new(V6_ADDR.into(), PORT),
+                    protocol_info: None,
+                })
+            );
+        }
+
+        /// > The client moves onto sorting addresses and establishing
+        /// > connections once one of the following condition sets is met:Either:
+        /// >
+        /// > - Some positive (non-empty) address answers have been received AND
+        /// > - A postive (non-empty) or negative (empty) answer has been
+        ///     received for the preferred address family that was queried AND
+        /// > - SVCB/HTTPS service information has been received (or has received a negative response)
+        ///
+        /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+        #[test]
+        #[ignore]
+        fn move_on_non_timeout() {
+            let (now, mut he) = setup();
+            todo!()
+        }
+
+        /// > Or:
+        /// >
+        /// > - Some positive (non-empty) address answers have been received AND
+        /// > - A resolution time delay has passed after which other answers have not been received
+        ///
+        /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+        #[test]
+        #[ignore]
+        fn move_on_timeout() {
+            let (now, mut he) = setup();
+            todo!()
+        }
     }
 }
