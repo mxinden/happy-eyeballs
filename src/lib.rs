@@ -175,12 +175,31 @@ enum State {
     /// Performing DNS resolution
     Resolving {
         // TODO: Option<Option<Option<_>>> isn't ideal. Refactor?
-        https_response: Option<Option<Option<()>>>,
-        aaaa_response: Option<Option<Option<Vec<Ipv6Addr>>>>,
-        a_response: Option<Option<Option<Vec<Ipv4Addr>>>>,
+        https_response: ResolutionState<()>,
+        aaaa_response: ResolutionState<Vec<Ipv6Addr>>,
+        a_response: ResolutionState<Vec<Ipv4Addr>>,
     },
     /// Attempting connections
     Connecting,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        State::Resolving {
+            https_response: ResolutionState::NotStarted,
+            aaaa_response: ResolutionState::NotStarted,
+            a_response: ResolutionState::NotStarted,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ResolutionState<V> {
+    NotStarted,
+    InProgress { started: Instant },
+    // TODO: Consider nesting the two Completed* states.
+    CompletedPositive { value: V },
+    CompletedNegative,
 }
 
 /// Network configuration for Happy Eyeballs behavior
@@ -241,11 +260,7 @@ impl HappyEyeballs {
         network_config: NetworkConfig,
     ) -> Self {
         Self {
-            state: State::Resolving {
-                https_response: None,
-                aaaa_response: None,
-                a_response: None,
-            },
+            state: State::default(),
             network_config,
             target: (hostname, port),
         }
@@ -271,7 +286,7 @@ impl HappyEyeballs {
         }
 
         // Send DNS queries.
-        let output = self.send_dns_request();
+        let output = self.send_dns_request(now);
         if output.is_some() {
             return output;
         }
@@ -285,27 +300,27 @@ impl HappyEyeballs {
         None
     }
 
-    fn send_dns_request(&mut self) -> Option<Output> {
+    fn send_dns_request(&mut self, now: Instant) -> Option<Output> {
         match &mut self.state {
             State::Resolving {
                 https_response,
                 aaaa_response,
                 a_response,
             } => {
-                if https_response.is_none() {
-                    *https_response = Some(None);
+                if matches!(https_response, ResolutionState::NotStarted) {
+                    *https_response = ResolutionState::InProgress { started: now };
                     Some(Output::SendDnsQuery {
                         hostname: self.target.0.clone(),
                         record_type: DnsRecordType::Https,
                     })
-                } else if aaaa_response.is_none() {
-                    *aaaa_response = Some(None);
+                } else if matches!(aaaa_response, ResolutionState::NotStarted) {
+                    *aaaa_response = ResolutionState::InProgress { started: now };
                     Some(Output::SendDnsQuery {
                         hostname: self.target.0.clone(),
                         record_type: DnsRecordType::Aaaa,
                     })
-                } else if a_response.is_none() {
-                    *a_response = Some(None);
+                } else if matches!(a_response, ResolutionState::NotStarted) {
+                    *a_response = ResolutionState::InProgress { started: now };
                     Some(Output::SendDnsQuery {
                         hostname: self.target.0.clone(),
                         record_type: DnsRecordType::A,
@@ -330,38 +345,38 @@ impl HappyEyeballs {
 
         match response {
             DnsResponse::Https(dns_https_response) => {
-                assert_eq!(*https_response, Some(None));
+                assert!(matches!(*https_response, ResolutionState::InProgress { started: _ }));
                 match dns_https_response {
                     DnsHttpsResponse::Positive {
                         addresses: _,
                         service_info: _,
                     } => {
-                        *https_response = Some(Some(Some(())));
+                        *https_response = ResolutionState::CompletedPositive { value: () };
                     }
                     DnsHttpsResponse::Negative => {
-                        *https_response = Some(Some(None));
+                        *https_response = ResolutionState::CompletedNegative;
                     }
                 }
             }
             DnsResponse::Aaaa(dns_aaaa_response) => {
-                assert_eq!(*aaaa_response, Some(None));
+                assert!(matches!(*aaaa_response, ResolutionState::InProgress { started: _ }));
                 match dns_aaaa_response {
                     DnsAaaaResponse::Positive { addresses } => {
-                        *aaaa_response = Some(Some(Some(addresses)));
+                        *aaaa_response = ResolutionState::CompletedPositive { value: addresses };
                     }
                     DnsAaaaResponse::Negative => {
-                        *aaaa_response = Some(Some(None));
+                        *aaaa_response = ResolutionState::CompletedNegative;
                     }
                 }
             }
             DnsResponse::A(dns_aresponse) => {
-                assert_eq!(*a_response, Some(None));
+                assert!(matches!(*a_response, ResolutionState::InProgress { started: _ }));
                 match dns_aresponse {
                     DnsAResponse::Positive { addresses } => {
-                        *a_response = Some(Some(Some(addresses)));
+                        *a_response = ResolutionState::CompletedPositive { value: addresses };
                     }
                     DnsAResponse::Negative => {
-                        *a_response = Some(Some(None));
+                        *a_response = ResolutionState::CompletedNegative;
                     }
                 }
             }
@@ -384,7 +399,7 @@ impl HappyEyeballs {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
         match (&aaaa_response, &a_response) {
-            (Some(Some(Some(_))), _) | (_, Some(Some(Some(_)))) => {}
+            (ResolutionState::CompletedPositive { .. }, _) | (_, ResolutionState::CompletedPositive { .. }) => {}
             _ => return None,
         }
 
@@ -392,17 +407,17 @@ impl HappyEyeballs {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
         match (&self.network_config, &aaaa_response, &a_response) {
-            (NetworkConfig::Ipv4Only, _, Some(Some(_))) => {}
-            (NetworkConfig::Ipv6Only { .. }, Some(Some(_)), _) => {}
-            (NetworkConfig::DualStack { prefer_ipv6: false }, _, Some(Some(_))) => {}
-            (NetworkConfig::DualStack { prefer_ipv6: true }, Some(Some(_)), _) => {}
+            (NetworkConfig::Ipv4Only, _, ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative) => {}
+            (NetworkConfig::Ipv6Only { .. }, ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative, _) => {}
+            (NetworkConfig::DualStack { prefer_ipv6: false }, _, ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative) => {}
+            (NetworkConfig::DualStack { prefer_ipv6: true }, ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative, _) => {}
             _ => return None,
         }
 
         // > SVCB/HTTPS service information has been received (or has received a negative response)
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        if !matches!(https_response, Some(Some(_))) {
+        if !matches!(https_response, ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative) {
             return None;
         }
 
@@ -413,16 +428,16 @@ impl HappyEyeballs {
         };
 
         let address = match (use_v6, &aaaa_response, &a_response) {
-            (true, Some(Some(Some(addresses))), _) => {
+            (true, ResolutionState::CompletedPositive { value: addresses }, _) => {
                 SocketAddr::new(IpAddr::V6(addresses[0]), self.target.1)
             }
-            (true, _, Some(Some(Some(addresses)))) => {
+            (true, _, ResolutionState::CompletedPositive { value: addresses }) => {
                 SocketAddr::new(IpAddr::V4(addresses[0]), self.target.1)
             }
-            (false, _, Some(Some(Some(addresses)))) => {
+            (false, _, ResolutionState::CompletedPositive { value: addresses }) => {
                 SocketAddr::new(IpAddr::V4(addresses[0]), self.target.1)
             }
-            (false, Some(Some(Some(addresses))), _) => {
+            (false, ResolutionState::CompletedPositive { value: addresses }, _) => {
                 SocketAddr::new(IpAddr::V6(addresses[0]), self.target.1)
             }
             _ => return None,
