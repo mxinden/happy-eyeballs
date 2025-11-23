@@ -430,8 +430,12 @@ mod tests {
     const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
 
     fn setup() -> (Instant, HappyEyeballs) {
+        setup_with_config(NetworkConfig::default())
+    }
+
+    fn setup_with_config(config: NetworkConfig) -> (Instant, HappyEyeballs) {
         let now = Instant::now();
-        let he = HappyEyeballs::new(HOSTNAME.to_string(), PORT, now);
+        let he = HappyEyeballs::with_network_config(HOSTNAME.to_string(), PORT, now, config);
         (now, he)
     }
 
@@ -563,14 +567,53 @@ mod tests {
         #[test]
         #[ignore]
         fn move_on_non_timeout() {
-            let (now, mut he) = setup();
-
-            // Send all DNS queries.
-            for _ in 0..3 {
-                he.process(None, now);
+            struct Case {
+                address_family: NetworkConfig,
+                positive: DnsResponse,
+                preferred: Option<DnsResponse>,
+                https: DnsResponse,
+                expected: Option<Output>,
             }
 
-            todo!();
+            let test_cases = vec![Case {
+                address_family: NetworkConfig::DualStack { prefer_ipv6: true },
+                positive: DnsResponse::Aaaa(DnsAaaaResponse::Positive {
+                    addresses: vec![V6_ADDR],
+                }),
+                preferred: None,
+                https: DnsResponse::Https(DnsHttpsResponse::Positive {
+                    addresses: vec![],
+                    service_info: None,
+                }),
+                expected: Some(Output::AttemptConnection {
+                    address: SocketAddr::new(V6_ADDR.into(), PORT),
+                    protocol_info: None,
+                }),
+            }];
+
+            for test_case in test_cases {
+                let Case {
+                    address_family: _,
+                    positive,
+                    preferred,
+                    https,
+                    expected: _,
+                } = test_case;
+
+                let (now, mut he) = setup_with_config(test_case.address_family);
+
+                // Send all DNS queries.
+                for _ in 0..3 {
+                    he.process(None, now);
+                }
+
+                he.process(Some(Input::DnsResponse(positive)), now);
+                if let Some(preferred) = preferred {
+                    he.process(Some(Input::DnsResponse(preferred)), now);
+                }
+                let out = he.process(Some(Input::DnsResponse(https)), now);
+                assert_eq!(out, test_case.expected);
+            }
         }
 
         /// > Or:
