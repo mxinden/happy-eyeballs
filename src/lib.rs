@@ -206,6 +206,16 @@ impl Default for NetworkConfig {
     }
 }
 
+impl NetworkConfig {
+    fn v6(&self) -> bool {
+        match self {
+            NetworkConfig::DualStack { prefer_ipv6 } => *prefer_ipv6,
+            NetworkConfig::Ipv6Only { .. } => true,
+            NetworkConfig::Ipv4Only => false,
+        }
+    }
+}
+
 /// Happy Eyeballs v3 state machine
 pub struct HappyEyeballs {
     /// Current state of the state machine
