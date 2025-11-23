@@ -22,9 +22,10 @@ let mut he = HappyEyeballs::new("example.com".to_string(), 443, start_time);
 
 // Process until we get outputs or timers
 loop {
-    match he.process(None) {
-        Output::None => break,
-        output => {
+    let now = Instant::now();
+    match he.process(None, now) {
+        None => break,
+        Some(output) => {
             // Handle the output (DNS query, connection attempt, etc.)
             println!("Output: {:?}", output);
         }

@@ -20,9 +20,10 @@
 //!
 //! // Process until we get outputs or timers
 //! loop {
-//!     match he.process(None) {
-//!         Output::None => break,
-//!         output => {
+//!     let now = Instant::now();
+//!     match he.process(None, now) {
+//!         None => break,
+//!         Some(output) => {
 //!             // Handle the output (DNS query, connection attempt, etc.)
 //!             println!("Output: {:?}", output);
 //!         }
@@ -373,7 +374,7 @@ impl HappyEyeballs {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
         match (&aaaa_response, &a_response) {
-            (Some(Some(Some(_))), _) | (Some(Some(Some(_))), _) => {}
+            (Some(Some(Some(_))), _) | (_, Some(Some(Some(_)))) => {}
             _ => return None,
         }
 
@@ -405,8 +406,14 @@ impl HappyEyeballs {
             (true, Some(Some(Some(addresses))), _) => {
                 SocketAddr::new(IpAddr::V6(addresses[0]), self.target.1)
             }
+            (true, _, Some(Some(Some(addresses)))) => {
+                SocketAddr::new(IpAddr::V4(addresses[0]), self.target.1)
+            }
             (false, _, Some(Some(Some(addresses)))) => {
                 SocketAddr::new(IpAddr::V4(addresses[0]), self.target.1)
+            }
+            (false, Some(Some(Some(addresses))), _) => {
+                SocketAddr::new(IpAddr::V6(addresses[0]), self.target.1)
             }
             _ => return None,
         };
@@ -428,6 +435,7 @@ mod tests {
     const HOSTNAME: &str = "example.com";
     const PORT: u16 = 443;
     const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+    const V4_ADDR: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);
 
     fn setup() -> (Instant, HappyEyeballs) {
         setup_with_config(NetworkConfig::default())
@@ -565,8 +573,8 @@ mod tests {
         ///
         /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
         #[test]
-        #[ignore]
         fn move_on_non_timeout() {
+            #[derive(Debug)]
             struct Case {
                 address_family: NetworkConfig,
                 positive: DnsResponse,
@@ -575,21 +583,59 @@ mod tests {
                 expected: Option<Output>,
             }
 
-            let test_cases = vec![Case {
-                address_family: NetworkConfig::DualStack { prefer_ipv6: true },
-                positive: DnsResponse::Aaaa(DnsAaaaResponse::Positive {
-                    addresses: vec![V6_ADDR],
-                }),
-                preferred: None,
-                https: DnsResponse::Https(DnsHttpsResponse::Positive {
-                    addresses: vec![],
-                    service_info: None,
-                }),
-                expected: Some(Output::AttemptConnection {
-                    address: SocketAddr::new(V6_ADDR.into(), PORT),
-                    protocol_info: None,
-                }),
-            }];
+            let test_cases = vec![
+                // V6 preferred, V6 positive, HTTPS positive, expect V6 connection attempt
+                Case {
+                    address_family: NetworkConfig::DualStack { prefer_ipv6: true },
+                    positive: DnsResponse::Aaaa(DnsAaaaResponse::Positive {
+                        addresses: vec![V6_ADDR],
+                    }),
+                    preferred: None,
+                    https: DnsResponse::Https(DnsHttpsResponse::Positive {
+                        addresses: vec![],
+                        service_info: None,
+                    }),
+                    expected: Some(Output::AttemptConnection {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        protocol_info: None,
+                    }),
+                },
+                // V6 preferred, V4 positive, V6 positive, HTTPS positive, expect V6 connection attempt
+                Case {
+                    address_family: NetworkConfig::DualStack { prefer_ipv6: true },
+                    positive: DnsResponse::A(DnsAResponse::Positive {
+                        addresses: vec![V4_ADDR],
+                    }),
+                    preferred: Some(DnsResponse::Aaaa(DnsAaaaResponse::Positive {
+                        addresses: vec![V6_ADDR],
+                    })),
+                    https: DnsResponse::Https(DnsHttpsResponse::Positive {
+                        addresses: vec![],
+                        service_info: None,
+                    }),
+                    expected: Some(Output::AttemptConnection {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        protocol_info: None,
+                    }),
+                },
+                // V6 preferred, V6 negative, V4 positive, HTTPS positive, expect V4 connection attempt
+                Case {
+                    address_family: NetworkConfig::DualStack { prefer_ipv6: true },
+                    positive: DnsResponse::A(DnsAResponse::Positive {
+                        addresses: vec![V4_ADDR],
+                    }),
+                    preferred: Some(DnsResponse::Aaaa(DnsAaaaResponse::Negative)),
+                    https: DnsResponse::Https(DnsHttpsResponse::Positive {
+                        addresses: vec![],
+                        service_info: None,
+                    }),
+                    expected: Some(Output::AttemptConnection {
+                        address: SocketAddr::new(V4_ADDR.into(), PORT),
+                        protocol_info: None,
+                    }),
+                },
+                // TODO: V4
+            ];
 
             for test_case in test_cases {
                 let Case {
