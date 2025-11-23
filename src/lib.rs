@@ -34,6 +34,11 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
+/// > The RECOMMENDED value for the Resolution Delay is 50 milliseconds.
+///
+/// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+const RESOLUTION_DELAY: Duration = Duration::from_millis(50);
+
 /// Input events to the Happy Eyeballs state machine
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
@@ -292,7 +297,7 @@ impl HappyEyeballs {
         }
 
         // Attempt connections.
-        let output = self.connection_attempt();
+        let output = self.connection_attempt(now);
         if output.is_some() {
             return output;
         }
@@ -345,7 +350,10 @@ impl HappyEyeballs {
 
         match response {
             DnsResponse::Https(dns_https_response) => {
-                assert!(matches!(*https_response, ResolutionState::InProgress { started: _ }));
+                assert!(matches!(
+                    *https_response,
+                    ResolutionState::InProgress { started: _ }
+                ));
                 match dns_https_response {
                     DnsHttpsResponse::Positive {
                         addresses: _,
@@ -359,7 +367,10 @@ impl HappyEyeballs {
                 }
             }
             DnsResponse::Aaaa(dns_aaaa_response) => {
-                assert!(matches!(*aaaa_response, ResolutionState::InProgress { started: _ }));
+                assert!(matches!(
+                    *aaaa_response,
+                    ResolutionState::InProgress { started: _ }
+                ));
                 match dns_aaaa_response {
                     DnsAaaaResponse::Positive { addresses } => {
                         *aaaa_response = ResolutionState::CompletedPositive { value: addresses };
@@ -370,7 +381,10 @@ impl HappyEyeballs {
                 }
             }
             DnsResponse::A(dns_aresponse) => {
-                assert!(matches!(*a_response, ResolutionState::InProgress { started: _ }));
+                assert!(matches!(
+                    *a_response,
+                    ResolutionState::InProgress { started: _ }
+                ));
                 match dns_aresponse {
                     DnsAResponse::Positive { addresses } => {
                         *a_response = ResolutionState::CompletedPositive { value: addresses };
@@ -385,7 +399,35 @@ impl HappyEyeballs {
         None
     }
 
-    fn connection_attempt(&mut self) -> Option<Output> {
+    /// > The client moves onto sorting addresses and establishing connections
+    /// once one of the following condition sets is met:
+    /// >
+    /// > Either:
+    /// >  
+    /// > - Some positive (non-empty) address answers have been received AND
+    /// > - A postive (non-empty) or negative (empty) answer has been received for the preferred address family that was queried AND
+    /// > - SVCB/HTTPS service information has been received (or has received a negative response)
+    /// >
+    /// > Or:
+    /// > - ome positive (non-empty) address answers have been received AND
+    /// > - A resolution time delay has passed after which other answers have not been received
+    ///
+    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+    fn connection_attempt(&mut self, now: Instant) -> Option<Output> {
+        // First try without timeout.
+        if let Some(output) = self.connection_attempt_without_timeout(now) {
+            return Some(output);
+        }
+
+        // Then try with timeout.
+        if let Some(output) = self.connection_attempt_with_timeout(now) {
+            return Some(output);
+        }
+
+        None
+    }
+
+    fn connection_attempt_without_timeout(&mut self, now: Instant) -> Option<Output> {
         let State::Resolving {
             https_response,
             aaaa_response,
@@ -399,7 +441,8 @@ impl HappyEyeballs {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
         match (&aaaa_response, &a_response) {
-            (ResolutionState::CompletedPositive { .. }, _) | (_, ResolutionState::CompletedPositive { .. }) => {}
+            (ResolutionState::CompletedPositive { .. }, _)
+            | (_, ResolutionState::CompletedPositive { .. }) => {}
             _ => return None,
         }
 
@@ -407,17 +450,36 @@ impl HappyEyeballs {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
         match (&self.network_config, &aaaa_response, &a_response) {
-            (NetworkConfig::Ipv4Only, _, ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative) => {}
-            (NetworkConfig::Ipv6Only { .. }, ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative, _) => {}
-            (NetworkConfig::DualStack { prefer_ipv6: false }, _, ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative) => {}
-            (NetworkConfig::DualStack { prefer_ipv6: true }, ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative, _) => {}
+            (
+                NetworkConfig::Ipv4Only,
+                _,
+                ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative,
+            ) => {}
+            (
+                NetworkConfig::Ipv6Only { .. },
+                ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative,
+                _,
+            ) => {}
+            (
+                NetworkConfig::DualStack { prefer_ipv6: false },
+                _,
+                ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative,
+            ) => {}
+            (
+                NetworkConfig::DualStack { prefer_ipv6: true },
+                ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative,
+                _,
+            ) => {}
             _ => return None,
         }
 
         // > SVCB/HTTPS service information has been received (or has received a negative response)
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        if !matches!(https_response, ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative) {
+        if !matches!(
+            https_response,
+            ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative
+        ) {
             return None;
         }
 
@@ -449,6 +511,57 @@ impl HappyEyeballs {
             address,
             protocol_info: None,
         });
+    }
+
+    fn connection_attempt_with_timeout(&mut self, now: Instant) -> Option<Output> {
+        let State::Resolving {
+            https_response,
+            aaaa_response,
+            a_response,
+        } = &self.state
+        else {
+            return None;
+        };
+
+        // > Or:
+        // >
+        // > - Some positive (non-empty) address answers have been received AND
+        // > - A resolution time delay has passed after which other answers have not been received
+        //
+        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+        match https_response {
+            ResolutionState::InProgress { started }
+                if now.duration_since(*started) >= RESOLUTION_DELAY => {}
+            _ => return None,
+        }
+        match (aaaa_response, a_response) {
+            (ResolutionState::InProgress { started }, _)
+                if now.duration_since(*started) >= RESOLUTION_DELAY => {}
+            (_, ResolutionState::InProgress { started })
+                if now.duration_since(*started) >= RESOLUTION_DELAY => {}
+            _ => return None,
+        }
+        match (aaaa_response, a_response) {
+            (ResolutionState::CompletedPositive { value: addresses }, _) => {
+                let address = addresses[0];
+                self.state = State::Connecting;
+                return Some(Output::AttemptConnection {
+                    address: SocketAddr::new(IpAddr::V6(address), self.target.1),
+                    protocol_info: None,
+                });
+            }
+            (_, ResolutionState::CompletedPositive { value: addresses }) => {
+                let address = addresses[0];
+                self.state = State::Connecting;
+                return Some(Output::AttemptConnection {
+                    address: SocketAddr::new(IpAddr::V4(address), self.target.1),
+                    protocol_info: None,
+                });
+            }
+            _ => {}
+        }
+
+        return None
     }
 }
 
@@ -694,10 +807,30 @@ mod tests {
         ///
         /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
         #[test]
-        #[ignore]
         fn move_on_timeout() {
-            let (now, mut he) = setup();
-            todo!()
+            let (mut now, mut he) = setup();
+
+            // Send all DNS queries.
+            for _ in 0..3 {
+                he.process(None, now);
+            }
+
+            he.process(
+                Some(Input::DnsResponse(DnsResponse::A(DnsAResponse::Positive {
+                    addresses: vec![V4_ADDR],
+                }))),
+                now,
+            );
+
+            now += RESOLUTION_DELAY;
+
+            assert_eq!(
+                he.process(None, now,),
+                Some(Output::AttemptConnection {
+                    address: SocketAddr::new(V4_ADDR.into(), PORT),
+                    protocol_info: None,
+                })
+            );
         }
     }
 }
