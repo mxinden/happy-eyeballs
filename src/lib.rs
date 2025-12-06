@@ -588,6 +588,37 @@ mod tests {
         }
     }
 
+    fn in_dns_https_positive() -> Input {
+        Input::DnsResponse(DnsResponse::Https(DnsHttpsResponse::Positive {
+            addresses: vec![],
+            service_info: None,
+        }))
+    }
+
+    fn in_dns_https_negative() -> Input {
+        Input::DnsResponse(DnsResponse::Https(DnsHttpsResponse::Negative))
+    }
+
+    fn in_dns_aaaa_positive() -> Input {
+        Input::DnsResponse(DnsResponse::Aaaa(DnsAaaaResponse::Positive {
+            addresses: vec![V6_ADDR],
+        }))
+    }
+
+    fn in_dns_a_positive() -> Input {
+        Input::DnsResponse(DnsResponse::A(DnsAResponse::Positive {
+            addresses: vec![V4_ADDR],
+        }))
+    }
+
+    fn in_dns_aaaa_negative() -> Input {
+        Input::DnsResponse(DnsResponse::Aaaa(DnsAaaaResponse::Negative))
+    }
+
+    fn in_dns_a_negative() -> Input {
+        Input::DnsResponse(DnsResponse::A(DnsAResponse::Negative))
+    }
+
     fn out_send_dns_https() -> Output {
         Output::SendDnsQuery {
             hostname: HOSTNAME.to_string(),
@@ -621,25 +652,6 @@ mod tests {
             address: SocketAddr::new(V4_ADDR.into(), PORT),
             protocol_info: None,
         }
-    }
-
-    fn in_dns_https_positive() -> Input {
-        Input::DnsResponse(DnsResponse::Https(DnsHttpsResponse::Positive {
-            addresses: vec![],
-            service_info: None,
-        }))
-    }
-
-    fn in_dns_aaaa_positive() -> Input {
-        Input::DnsResponse(DnsResponse::Aaaa(DnsAaaaResponse::Positive {
-            addresses: vec![V6_ADDR],
-        }))
-    }
-
-    fn in_dns_a_positive() -> Input {
-        Input::DnsResponse(DnsResponse::A(DnsAResponse::Positive {
-            addresses: vec![V4_ADDR],
-        }))
     }
 
     fn setup() -> (Instant, HappyEyeballs) {
@@ -726,9 +738,8 @@ mod tests {
             #[derive(Debug)]
             struct Case {
                 address_family: NetworkConfig,
-                positive: DnsResponse,
-                preferred: Option<DnsResponse>,
-                https: DnsResponse,
+                positive: Input,
+                preferred: Option<Input>,
                 expected: Option<Output>,
             }
 
@@ -736,78 +747,63 @@ mod tests {
                 // V6 preferred, V6 positive, HTTPS positive, expect V6 connection attempt
                 Case {
                     address_family: NetworkConfig::DualStack { prefer_ipv6: true },
-                    positive: DnsResponse::Aaaa(DnsAaaaResponse::Positive {
-                        addresses: vec![V6_ADDR],
-                    }),
+                    positive: in_dns_aaaa_positive(),
                     preferred: None,
-                    https: DnsResponse::Https(DnsHttpsResponse::Positive {
-                        addresses: vec![],
-                        service_info: None,
-                    }),
-                    expected: Some(Output::AttemptConnection {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol_info: None,
-                    }),
+                    expected: Some(out_attempt_v6()),
                 },
                 // V6 preferred, V4 positive, V6 positive, HTTPS positive, expect V6 connection attempt
                 Case {
                     address_family: NetworkConfig::DualStack { prefer_ipv6: true },
-                    positive: DnsResponse::A(DnsAResponse::Positive {
-                        addresses: vec![V4_ADDR],
-                    }),
-                    preferred: Some(DnsResponse::Aaaa(DnsAaaaResponse::Positive {
-                        addresses: vec![V6_ADDR],
-                    })),
-                    https: DnsResponse::Https(DnsHttpsResponse::Positive {
-                        addresses: vec![],
-                        service_info: None,
-                    }),
-                    expected: Some(Output::AttemptConnection {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol_info: None,
-                    }),
+                    positive: in_dns_a_positive(),
+                    preferred: Some(in_dns_aaaa_positive()),
+                    expected: Some(out_attempt_v6()),
                 },
                 // V6 preferred, V6 negative, V4 positive, HTTPS positive, expect V4 connection attempt
                 Case {
                     address_family: NetworkConfig::DualStack { prefer_ipv6: true },
-                    positive: DnsResponse::A(DnsAResponse::Positive {
-                        addresses: vec![V4_ADDR],
-                    }),
-                    preferred: Some(DnsResponse::Aaaa(DnsAaaaResponse::Negative)),
-                    https: DnsResponse::Https(DnsHttpsResponse::Positive {
-                        addresses: vec![],
-                        service_info: None,
-                    }),
-                    expected: Some(Output::AttemptConnection {
-                        address: SocketAddr::new(V4_ADDR.into(), PORT),
-                        protocol_info: None,
-                    }),
+                    positive: in_dns_a_positive(),
+                    preferred: Some(in_dns_aaaa_negative()),
+                    expected: Some(out_attempt_v4()),
                 },
-                // TODO: V4
+                // V4 preferred, V4 positive, HTTPS positive, expect V4 connection attempt
+                Case {
+                    address_family: NetworkConfig::DualStack { prefer_ipv6: false },
+                    positive: in_dns_a_positive(),
+                    preferred: None,
+                    expected: Some(out_attempt_v4()),
+                },
+                // V4 preferred, V6 positive, V4 positive, HTTPS positive, expect V4 connection attempt
+                Case {
+                    address_family: NetworkConfig::DualStack { prefer_ipv6: false },
+                    positive: in_dns_aaaa_positive(),
+                    preferred: Some(in_dns_a_positive()),
+                    expected: Some(out_attempt_v4()),
+                },
+                // V4 preferred, V4 negative, V6 positive, HTTPS positive, expect V6 connection attempt
+                Case {
+                    address_family: NetworkConfig::DualStack { prefer_ipv6: false },
+                    positive: in_dns_aaaa_positive(),
+                    preferred: Some(in_dns_a_negative()),
+                    expected: Some(out_attempt_v6()),
+                },
             ];
 
             for test_case in test_cases {
-                let Case {
-                    address_family: _,
-                    positive,
-                    preferred,
-                    https,
-                    expected: _,
-                } = test_case;
+                for https in [in_dns_https_positive(), in_dns_https_negative()] {
+                    let (now, mut he) = setup_with_config(test_case.address_family.clone());
 
-                let (now, mut he) = setup_with_config(test_case.address_family);
-
-                // Send all DNS queries.
-                for _ in 0..3 {
-                    he.process(None, now);
+                    he.expect(
+                        vec![
+                            (None, Some(out_send_dns_https())),
+                            (None, Some(out_send_dns_aaaa())),
+                            (None, Some(out_send_dns_a())),
+                            (Some(test_case.positive.clone()), None),
+                            (test_case.preferred.clone(), None),
+                            (Some(https), test_case.expected.clone()),
+                        ],
+                        now,
+                    );
                 }
-
-                he.process(Some(Input::DnsResponse(positive)), now);
-                if let Some(preferred) = preferred {
-                    he.process(Some(Input::DnsResponse(preferred)), now);
-                }
-                let out = he.process(Some(Input::DnsResponse(https)), now);
-                assert_eq!(out, test_case.expected);
             }
         }
 
