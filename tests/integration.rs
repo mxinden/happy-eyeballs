@@ -1,6 +1,12 @@
-use std::{net::{Ipv4Addr, Ipv6Addr, SocketAddr}, time::Instant};
+use std::{
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    time::Instant,
+};
 
-use happy_eyeballs::{DnsAResponse, DnsAaaaResponse, DnsHttpsResponse, DnsRecordType, DnsResponse, HappyEyeballs, Input, NetworkConfig, Output};
+use happy_eyeballs::{
+    DnsAResponse, DnsAaaaResponse, DnsHttpsResponse, DnsRecordType, DnsResponse, HappyEyeballs,
+    Input, NetworkConfig, Output,
+};
 
 const HOSTNAME: &str = "example.com";
 const PORT: u16 = 443;
