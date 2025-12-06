@@ -15,12 +15,11 @@
 //! use happy_eyeballs::*;
 //! use std::time::Instant;
 //!
-//! let start_time = Instant::now();
-//! let mut he = HappyEyeballs::new("example.com".to_string(), 443, start_time);
+//! let mut he = HappyEyeballs::new("example.com".to_string(), 443);
+//! let now = Instant::now();
 //!
 //! // Process until we get outputs or timers
 //! loop {
-//!     let now = Instant::now();
 //!     match he.process(None, now) {
 //!         None => break,
 //!         Some(output) => {
@@ -230,16 +229,6 @@ impl Default for NetworkConfig {
     }
 }
 
-impl NetworkConfig {
-    fn v6(&self) -> bool {
-        match self {
-            NetworkConfig::DualStack { prefer_ipv6 } => *prefer_ipv6,
-            NetworkConfig::Ipv6Only { .. } => true,
-            NetworkConfig::Ipv4Only => false,
-        }
-    }
-}
-
 /// Happy Eyeballs v3 state machine
 pub struct HappyEyeballs {
     /// Current state of the state machine
@@ -253,17 +242,12 @@ pub struct HappyEyeballs {
 
 impl HappyEyeballs {
     /// Create a new Happy Eyeballs state machine with default network config
-    pub fn new(hostname: String, port: u16, start_time: Instant) -> Self {
-        Self::with_network_config(hostname, port, start_time, NetworkConfig::default())
+    pub fn new(hostname: String, port: u16) -> Self {
+        Self::with_network_config(hostname, port, NetworkConfig::default())
     }
 
     /// Create a new Happy Eyeballs state machine with custom network configuration
-    pub fn with_network_config(
-        hostname: String,
-        port: u16,
-        start_time: Instant,
-        network_config: NetworkConfig,
-    ) -> Self {
+    pub fn with_network_config(hostname: String, port: u16, network_config: NetworkConfig) -> Self {
         Self {
             state: State::default(),
             network_config,
@@ -415,7 +399,7 @@ impl HappyEyeballs {
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
     fn connection_attempt(&mut self, now: Instant) -> Option<Output> {
         // First try without timeout.
-        if let Some(output) = self.connection_attempt_without_timeout(now) {
+        if let Some(output) = self.connection_attempt_without_timeout() {
             return Some(output);
         }
 
@@ -427,7 +411,7 @@ impl HappyEyeballs {
         None
     }
 
-    fn connection_attempt_without_timeout(&mut self, now: Instant) -> Option<Output> {
+    fn connection_attempt_without_timeout(&mut self) -> Option<Output> {
         let State::Resolving {
             https_response,
             aaaa_response,
@@ -660,7 +644,7 @@ mod tests {
 
     fn setup_with_config(config: NetworkConfig) -> (Instant, HappyEyeballs) {
         let now = Instant::now();
-        let he = HappyEyeballs::with_network_config(HOSTNAME.to_string(), PORT, now, config);
+        let he = HappyEyeballs::with_network_config(HOSTNAME.to_string(), PORT, config);
         (now, he)
     }
 

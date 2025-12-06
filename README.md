@@ -17,12 +17,11 @@ network conditions including HTTPS service discovery and QUIC.
 use happy_eyeballs::*;
 use std::time::Instant;
 
-let start_time = Instant::now();
-let mut he = HappyEyeballs::new("example.com".to_string(), 443, start_time);
+let mut he = HappyEyeballs::new("example.com".to_string(), 443);
+let now = Instant::now();
 
 // Process until we get outputs or timers
 loop {
-    let now = Instant::now();
     match he.process(None, now) {
         None => break,
         Some(output) => {
