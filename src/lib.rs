@@ -561,7 +561,7 @@ impl HappyEyeballs {
             _ => {}
         }
 
-        return None
+        return None;
     }
 }
 
@@ -574,6 +574,73 @@ mod tests {
     const PORT: u16 = 443;
     const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
     const V4_ADDR: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);
+
+    trait HappyEyeballsExt {
+        fn expect(&mut self, input_output: Vec<(Option<Input>, Option<Output>)>, now: Instant);
+    }
+
+    impl HappyEyeballsExt for HappyEyeballs {
+        fn expect(&mut self, input_output: Vec<(Option<Input>, Option<Output>)>, now: Instant) {
+            for (input, expected_output) in input_output {
+                let output = self.process(input, now);
+                assert_eq!(output, expected_output);
+            }
+        }
+    }
+
+    fn out_send_dns_https() -> Output {
+        Output::SendDnsQuery {
+            hostname: HOSTNAME.to_string(),
+            record_type: DnsRecordType::Https,
+        }
+    }
+
+    fn out_send_dns_aaaa() -> Output {
+        Output::SendDnsQuery {
+            hostname: HOSTNAME.to_string(),
+            record_type: DnsRecordType::Aaaa,
+        }
+    }
+
+    fn out_send_dns_a() -> Output {
+        Output::SendDnsQuery {
+            hostname: HOSTNAME.to_string(),
+            record_type: DnsRecordType::A,
+        }
+    }
+
+    fn out_attempt_v6() -> Output {
+        Output::AttemptConnection {
+            address: SocketAddr::new(V6_ADDR.into(), PORT),
+            protocol_info: None,
+        }
+    }
+
+    fn out_attempt_v4() -> Output {
+        Output::AttemptConnection {
+            address: SocketAddr::new(V4_ADDR.into(), PORT),
+            protocol_info: None,
+        }
+    }
+
+    fn in_dns_https_positive() -> Input {
+        Input::DnsResponse(DnsResponse::Https(DnsHttpsResponse::Positive {
+            addresses: vec![],
+            service_info: None,
+        }))
+    }
+
+    fn in_dns_aaaa_positive() -> Input {
+        Input::DnsResponse(DnsResponse::Aaaa(DnsAaaaResponse::Positive {
+            addresses: vec![V6_ADDR],
+        }))
+    }
+
+    fn in_dns_a_positive() -> Input {
+        Input::DnsResponse(DnsResponse::A(DnsAResponse::Positive {
+            addresses: vec![V4_ADDR],
+        }))
+    }
 
     fn setup() -> (Instant, HappyEyeballs) {
         setup_with_config(NetworkConfig::default())
@@ -589,17 +656,7 @@ mod tests {
     fn initial_state() {
         let (now, mut he) = setup();
 
-        // Should immediately start with DNS query.
-        match he.process(None, now) {
-            Some(Output::SendDnsQuery {
-                hostname,
-                record_type,
-            }) => {
-                assert_eq!(hostname, "example.com");
-                assert_eq!(record_type, DnsRecordType::Https);
-            }
-            _ => panic!("Expected SendDnsQuery output"),
-        }
+        he.expect(vec![(None, Some(out_send_dns_https()))], now);
     }
 
     /// > 4. Hostname Resolution
@@ -623,38 +680,14 @@ mod tests {
         fn sendig_dns_queries() {
             let (now, mut he) = setup();
 
-            match he.process(None, now) {
-                Some(Output::SendDnsQuery {
-                    hostname,
-                    record_type,
-                }) => {
-                    assert_eq!(hostname, HOSTNAME);
-                    assert_eq!(record_type, DnsRecordType::Https);
-                }
-                _ => panic!("Expected HTTPS query initially"),
-            }
-
-            match he.process(None, now) {
-                Some(Output::SendDnsQuery {
-                    hostname,
-                    record_type,
-                }) => {
-                    assert_eq!(hostname, HOSTNAME);
-                    assert_eq!(record_type, DnsRecordType::Aaaa);
-                }
-                _ => panic!(),
-            }
-
-            match he.process(None, now) {
-                Some(Output::SendDnsQuery {
-                    hostname,
-                    record_type,
-                }) => {
-                    assert_eq!(hostname, HOSTNAME);
-                    assert_eq!(record_type, DnsRecordType::A);
-                }
-                _ => panic!(),
-            }
+            he.expect(
+                vec![
+                    (None, Some(out_send_dns_https())),
+                    (None, Some(out_send_dns_aaaa())),
+                    (None, Some(out_send_dns_a())),
+                ],
+                now,
+            );
         }
 
         /// > Implementations SHOULD NOT wait for all answers to return before
@@ -665,37 +698,15 @@ mod tests {
         fn dont_wait_for_all_dns_answers() {
             let (now, mut he) = setup();
 
-            // Send all DNS queries.
-            for _ in 0..3 {
-                he.process(None, now);
-            }
-
-            assert_eq!(
-                he.process(
-                    Some(Input::DnsResponse(DnsResponse::Https(
-                        DnsHttpsResponse::Positive {
-                            addresses: vec![],
-                            service_info: None
-                        }
-                    ))),
-                    now
-                ),
-                None
-            );
-
-            assert_eq!(
-                he.process(
-                    Some(Input::DnsResponse(DnsResponse::Aaaa(
-                        DnsAaaaResponse::Positive {
-                            addresses: vec![V6_ADDR]
-                        }
-                    ))),
-                    now
-                ),
-                Some(Output::AttemptConnection {
-                    address: SocketAddr::new(V6_ADDR.into(), PORT),
-                    protocol_info: None,
-                })
+            he.expect(
+                vec![
+                    (None, Some(out_send_dns_https())),
+                    (None, Some(out_send_dns_aaaa())),
+                    (None, Some(out_send_dns_a())),
+                    (Some(in_dns_https_positive()), None),
+                    (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                ],
+                now,
             );
         }
 
@@ -806,31 +817,47 @@ mod tests {
         /// > - A resolution time delay has passed after which other answers have not been received
         ///
         /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+        // TODO: Other combinations
         #[test]
         fn move_on_timeout() {
             let (mut now, mut he) = setup();
 
-            // Send all DNS queries.
-            for _ in 0..3 {
-                he.process(None, now);
-            }
-
-            he.process(
-                Some(Input::DnsResponse(DnsResponse::A(DnsAResponse::Positive {
-                    addresses: vec![V4_ADDR],
-                }))),
+            he.expect(
+                vec![
+                    (None, Some(out_send_dns_https())),
+                    (None, Some(out_send_dns_aaaa())),
+                    (None, Some(out_send_dns_a())),
+                    (Some(in_dns_a_positive()), None),
+                ],
                 now,
             );
 
             now += RESOLUTION_DELAY;
 
-            assert_eq!(
-                he.process(None, now,),
-                Some(Output::AttemptConnection {
-                    address: SocketAddr::new(V4_ADDR.into(), PORT),
-                    protocol_info: None,
-                })
-            );
+            he.expect(vec![(None, Some(out_attempt_v4()))], now);
+        }
+
+        /// > ServiceMode records can contain address hints via ipv6hint and
+        /// > ipv4hint parameters. When these are received, they SHOULD be
+        /// > considered as positive non-empty answers for the purpose of the
+        /// > algorithm when A and AAAA records corresponding to the TargetName
+        /// > are not available yet.
+        ///
+        /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
+        #[test]
+        #[ignore]
+        fn https_hints() {
+            todo!();
+        }
+
+        /// > Note that clients are still required to issue A and AAAA queries
+        /// > for those TargetNames if they haven't yet received those records.
+        ///
+        /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
+        #[test]
+        #[ignore]
+        fn https_hints_still_query_a_aaaa() {
+            todo!();
         }
     }
 }
