@@ -50,17 +50,12 @@ pub enum Input {
         error: String,
     },
 
-    /// Timer expired (for various delays)
-    Timer {
-        timer_type: TimerType,
-        current_time: Instant,
-    },
-
     /// Connection attempt result
     ConnectionResult {
         address: SocketAddr,
         result: Result<(), String>,
-        current_time: Instant,
+        // TODO: When attempting a connection with ECH, the remote might send a
+        // new ECH config to us on failure. That might be carried in this event?
     },
 
     /// IPv4 address needs NAT64 synthesis
@@ -68,6 +63,11 @@ pub enum Input {
 
     /// Cancel the current connection attempt
     Cancel,
+    // TODO: Do we need a TimerFired event? Isn't passing in an Option::None enough?
+
+    // TODO: Should we have a GiveUp event? That way we could conclude our
+    // logging, maybe log a summary. Maybe finish the Firefox Profiler Flow with
+    // a final marker.
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +77,7 @@ pub enum DnsResponse {
     A(DnsAResponse),
 }
 
+// TODO: Needs to contain the domain. E.g. HTTPS records can point to different domains.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DnsHttpsResponse {
     Positive {
@@ -86,12 +87,14 @@ pub enum DnsHttpsResponse {
     Negative,
 }
 
+// TODO: Needs to contain the domain. E.g. HTTPS records can point to different domains, which can trigger multiple AAAA queries.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DnsAaaaResponse {
     Positive { addresses: Vec<Ipv6Addr> },
     Negative,
 }
 
+// TODO: Needs to contain the domain. E.g. HTTPS records can point to different domains, which can trigger multiple A queries.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DnsAResponse {
     Positive { addresses: Vec<Ipv4Addr> },
@@ -113,26 +116,17 @@ pub enum Output {
         duration: Duration,
     },
 
-    /// Cancel a timer
-    CancelTimer(TimerType),
-
     /// Attempt to connect to an address
     AttemptConnection {
         address: SocketAddr,
-        protocol_info: Option<ProtocolInfo>,
+        // TODO: Protocol
+        // TODO: ECH
     },
 
+    // TODO: Consider a CancelSendDnsQuery.
     /// Cancel a connection attempt
     CancelConnection(SocketAddr),
-
-    /// Connection successfully established
-    ConnectionEstablished {
-        address: SocketAddr,
-        protocol_info: Option<ProtocolInfo>,
-    },
-
-    /// All connection attempts failed
-    ConnectionFailed { error: String },
+    // TODO: Should there be an event for giving up?
 }
 
 /// DNS record types
@@ -163,14 +157,6 @@ pub struct ServiceInfo {
     pub ech_config: Option<Vec<u8>>,
     pub ipv4_hints: Vec<Ipv4Addr>,
     pub ipv6_hints: Vec<Ipv6Addr>,
-}
-
-/// Protocol information for connections
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProtocolInfo {
-    pub alpn: Option<String>,
-    pub supports_ech: bool,
-    pub service_priority: Option<u16>,
 }
 
 /// State of the Happy Eyeballs algorithm
@@ -206,6 +192,28 @@ enum ResolutionState<V> {
     CompletedNegative,
 }
 
+// TODO: We need to track what HTTP versions are supported, e.g. whether HTTP/3
+// is disabled via pref or not. H1, H2, H3.
+//
+// TODO: We need to track whether HTTP RR DNS is enabled or disabled.
+//
+// TODO: We need to track whether ECH is enabled or disabled.
+//
+// TODO: Should we make HappyEyeballs proxy aware? E.g. should it know that the
+// proxy is resolving the domain? Should it still trigger an HTTP RR lookup to
+// see whether the remote supports HTTP/3? Should it first do MASQUE connect-udp
+// and HTTP/3 and then HTTP CONNECT with HTTP/2?
+//
+// TODO: Should we make HappyEyeballs aware of whether this is a WebSocket
+// connection? That way we could e.g. track EXTENDED CONNECT support, or
+// fallback to a different connection in case WebSocket doesn't work? Likely for
+// v2 of the project.
+//
+// TODO: Should we make HappyEyeballs aware of whether this is a WebTransport
+// connection? That way we could e.g. track EXTENDED CONNECT support, or
+// fallback to a different connection in case WebTransport doesn't work? Likely
+// for v2 of the project.
+//
 /// Network configuration for Happy Eyeballs behavior
 #[derive(Debug, Clone, PartialEq)]
 pub enum NetworkConfig {
@@ -491,10 +499,7 @@ impl HappyEyeballs {
 
         self.state = State::Connecting;
 
-        return Some(Output::AttemptConnection {
-            address,
-            protocol_info: None,
-        });
+        return Some(Output::AttemptConnection { address });
     }
 
     fn connection_attempt_with_timeout(&mut self, now: Instant) -> Option<Output> {
@@ -531,7 +536,6 @@ impl HappyEyeballs {
                 self.state = State::Connecting;
                 return Some(Output::AttemptConnection {
                     address: SocketAddr::new(IpAddr::V6(address), self.target.1),
-                    protocol_info: None,
                 });
             }
             (_, ResolutionState::CompletedPositive { value: addresses }) => {
@@ -539,7 +543,6 @@ impl HappyEyeballs {
                 self.state = State::Connecting;
                 return Some(Output::AttemptConnection {
                     address: SocketAddr::new(IpAddr::V4(address), self.target.1),
-                    protocol_info: None,
                 });
             }
             _ => {}

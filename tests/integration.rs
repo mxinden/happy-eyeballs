@@ -81,14 +81,12 @@ fn out_send_dns_a() -> Output {
 fn out_attempt_v6() -> Output {
     Output::AttemptConnection {
         address: SocketAddr::new(V6_ADDR.into(), PORT),
-        protocol_info: None,
     }
 }
 
 fn out_attempt_v4() -> Output {
     Output::AttemptConnection {
         address: SocketAddr::new(V4_ADDR.into(), PORT),
-        protocol_info: None,
     }
 }
 
