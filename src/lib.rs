@@ -80,8 +80,12 @@ pub enum DnsResponse {
 // TODO: Needs to contain the domain. E.g. HTTPS records can point to different domains.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DnsHttpsResponse {
+    // TODO: It could have multiple entries, not just one ServiceInfo. See e.g.
+    // facebook.com.
+    //
+    // TODO: This needs a domain, such that we can match this response to the
+    // request that we previously sent.
     Positive {
-        addresses: Vec<IpAddr>,
         service_info: Option<ServiceInfo>,
     },
     Negative,
@@ -348,7 +352,6 @@ impl HappyEyeballs {
                 ));
                 match dns_https_response {
                     DnsHttpsResponse::Positive {
-                        addresses: _,
                         service_info: _,
                     } => {
                         *https_response = ResolutionState::CompletedPositive { value: () };

@@ -28,7 +28,6 @@ impl HappyEyeballsExt for HappyEyeballs {
 
 fn in_dns_https_positive() -> Input {
     Input::DnsResponse(DnsResponse::Https(DnsHttpsResponse::Positive {
-        addresses: vec![],
         service_info: None,
     }))
 }
