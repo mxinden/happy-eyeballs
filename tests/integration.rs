@@ -4,8 +4,7 @@ use std::{
 };
 
 use happy_eyeballs::{
-    DnsAResponse, DnsAaaaResponse, DnsHttpsResponse, DnsRecordType, DnsResponse, HappyEyeballs,
-    Input, NetworkConfig, Output,
+    DnsRecordType, DnsResponse, DnsResponseInner, HappyEyeballs, Input, NetworkConfig, Output,
 };
 
 const HOSTNAME: &str = "example.com";
@@ -27,8 +26,9 @@ impl HappyEyeballsExt for HappyEyeballs {
 }
 
 fn in_dns_https_positive() -> Input {
-    Input::DnsResponse(DnsResponse::Https(DnsHttpsResponse::Positive {
-        service_info: vec![
+    Input::DnsResponse(DnsResponse {
+        target_name: "example.com".to_string(),
+        inner: DnsResponseInner::Https(Ok(vec![
             happy_eyeballs::ServiceInfo {
                 priority: 1,
                 target_name: "svc1.example.com.".to_string(),
@@ -45,32 +45,43 @@ fn in_dns_https_positive() -> Input {
                 ipv4_hints: vec![],
                 ech_config: None,
             },
-        ],
-    }))
+        ])),
+    })
 }
 
 fn in_dns_https_negative() -> Input {
-    Input::DnsResponse(DnsResponse::Https(DnsHttpsResponse::Negative))
+    Input::DnsResponse(DnsResponse {
+        target_name: "example.com".to_string(),
+        inner: DnsResponseInner::Https(Err(())),
+    })
 }
 
 fn in_dns_aaaa_positive() -> Input {
-    Input::DnsResponse(DnsResponse::Aaaa(DnsAaaaResponse::Positive {
-        addresses: vec![V6_ADDR],
-    }))
+    Input::DnsResponse(DnsResponse {
+        target_name: "example.com".to_string(),
+        inner: DnsResponseInner::Aaaa(Ok(vec![V6_ADDR])),
+    })
 }
 
 fn in_dns_a_positive() -> Input {
-    Input::DnsResponse(DnsResponse::A(DnsAResponse::Positive {
-        addresses: vec![V4_ADDR],
-    }))
+    Input::DnsResponse(DnsResponse {
+        target_name: "example.com".to_string(),
+        inner: DnsResponseInner::A(Ok(vec![V4_ADDR])),
+    })
 }
 
 fn in_dns_aaaa_negative() -> Input {
-    Input::DnsResponse(DnsResponse::Aaaa(DnsAaaaResponse::Negative))
+    Input::DnsResponse(DnsResponse {
+        target_name: "example.com".to_string(),
+        inner: DnsResponseInner::Aaaa(Err(())),
+    })
 }
 
 fn in_dns_a_negative() -> Input {
-    Input::DnsResponse(DnsResponse::A(DnsAResponse::Negative))
+    Input::DnsResponse(DnsResponse {
+        target_name: "example.com".to_string(),
+        inner: DnsResponseInner::A(Err(())),
+    })
 }
 
 fn out_send_dns_https() -> Output {

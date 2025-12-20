@@ -30,6 +30,7 @@
 //! }
 //! ```
 
+use std::cmp::Ordering;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
@@ -71,38 +72,45 @@ pub enum Input {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum DnsResponse {
-    Https(DnsHttpsResponse),
-    Aaaa(DnsAaaaResponse),
-    A(DnsAResponse),
+pub struct DnsResponse {
+    // TODO: Replace string with TargetName type.
+    pub target_name: String,
+    pub inner: DnsResponseInner,
 }
 
-// TODO: Needs to contain the domain. E.g. HTTPS records can point to different domains.
-#[derive(Debug, Clone, PartialEq)]
-pub enum DnsHttpsResponse {
-    // TODO: It could have multiple entries, not just one ServiceInfo. See e.g.
-    // facebook.com.
-    //
-    // TODO: This needs a domain, such that we can match this response to the
-    // request that we previously sent.
-    Positive {
-        service_info: Vec<ServiceInfo>,
-    },
-    Negative,
+impl DnsResponse {
+    fn record_type(&self) -> DnsRecordType {
+        self.inner.record_type()
+    }
+
+    fn positive(&self) -> bool {
+        self.inner.positive()
+    }
 }
 
-// TODO: Needs to contain the domain. E.g. HTTPS records can point to different domains, which can trigger multiple AAAA queries.
 #[derive(Debug, Clone, PartialEq)]
-pub enum DnsAaaaResponse {
-    Positive { addresses: Vec<Ipv6Addr> },
-    Negative,
+pub enum DnsResponseInner {
+    Https(Result<Vec<ServiceInfo>, ()>),
+    Aaaa(Result<Vec<Ipv6Addr>, ()>),
+    A(Result<Vec<Ipv4Addr>, ()>),
 }
 
-// TODO: Needs to contain the domain. E.g. HTTPS records can point to different domains, which can trigger multiple A queries.
-#[derive(Debug, Clone, PartialEq)]
-pub enum DnsAResponse {
-    Positive { addresses: Vec<Ipv4Addr> },
-    Negative,
+impl DnsResponseInner {
+    fn record_type(&self) -> DnsRecordType {
+        match self {
+            DnsResponseInner::Https(_) => DnsRecordType::Https,
+            DnsResponseInner::Aaaa(_) => DnsRecordType::Aaaa,
+            DnsResponseInner::A(_) => DnsRecordType::A,
+        }
+    }
+
+    fn positive(&self) -> bool {
+        match self {
+            DnsResponseInner::Https(r) => r.is_ok(),
+            DnsResponseInner::Aaaa(r) => r.is_ok(),
+            DnsResponseInner::A(r) => r.is_ok(),
+        }
+    }
 }
 
 /// Output events from the Happy Eyeballs state machine
@@ -163,37 +171,50 @@ pub struct ServiceInfo {
     pub ipv6_hints: Vec<Ipv6Addr>,
 }
 
-/// State of the Happy Eyeballs algorithm
 #[derive(Debug, Clone, PartialEq)]
-enum State {
-    /// Performing DNS resolution
-    Resolving {
-        // TODO: Option<Option<Option<_>>> isn't ideal. Refactor?
-        https_response: ResolutionState<()>,
-        aaaa_response: ResolutionState<Vec<Ipv6Addr>>,
-        a_response: ResolutionState<Vec<Ipv4Addr>>,
+enum DnsQuery {
+    InProgress {
+        started: Instant,
+        target_name: String,
+        record_type: DnsRecordType,
     },
-    /// Attempting connections
-    Connecting,
+    Completed {
+        response: DnsResponse,
+    },
 }
 
-impl Default for State {
-    fn default() -> Self {
-        State::Resolving {
-            https_response: ResolutionState::NotStarted,
-            aaaa_response: ResolutionState::NotStarted,
-            a_response: ResolutionState::NotStarted,
+impl DnsQuery {
+    fn record_type(&self) -> DnsRecordType {
+        match self {
+            DnsQuery::InProgress { record_type, .. } => *record_type,
+            DnsQuery::Completed { response } => match response.inner {
+                DnsResponseInner::Https(_) => DnsRecordType::Https,
+                DnsResponseInner::Aaaa(_) => DnsRecordType::Aaaa,
+                DnsResponseInner::A(_) => DnsRecordType::A,
+            },
         }
     }
-}
 
-#[derive(Debug, Clone, PartialEq)]
-enum ResolutionState<V> {
-    NotStarted,
-    InProgress { started: Instant },
-    // TODO: Consider nesting the two Completed* states.
-    CompletedPositive { value: V },
-    CompletedNegative,
+    fn target_name(&self) -> &str {
+        match self {
+            DnsQuery::InProgress { target_name, .. } => target_name,
+            DnsQuery::Completed { response } => &response.target_name,
+        }
+    }
+
+    fn positive(&self) -> bool {
+        match self {
+            DnsQuery::InProgress { .. } => false,
+            DnsQuery::Completed { response } => response.positive(),
+        }
+    }
+
+    fn get_response(&self) -> Option<&DnsResponse> {
+        match self {
+            DnsQuery::InProgress { .. } => None,
+            DnsQuery::Completed { response } => Some(response),
+        }
+    }
 }
 
 // TODO: We need to track what HTTP versions are supported, e.g. whether HTTP/3
@@ -241,10 +262,34 @@ impl Default for NetworkConfig {
     }
 }
 
+impl NetworkConfig {
+    fn prefer_v6(&self) -> bool {
+        match self {
+            NetworkConfig::DualStack { prefer_ipv6 } => *prefer_ipv6,
+            NetworkConfig::Ipv6Only { .. } => true,
+            NetworkConfig::Ipv4Only => false,
+        }
+    }
+
+    fn preferred_dns_record_type(&self) -> DnsRecordType {
+        match self {
+            NetworkConfig::DualStack { prefer_ipv6 } => {
+                if *prefer_ipv6 {
+                    DnsRecordType::Aaaa
+                } else {
+                    DnsRecordType::A
+                }
+            }
+            NetworkConfig::Ipv6Only { .. } => DnsRecordType::Aaaa,
+            NetworkConfig::Ipv4Only => DnsRecordType::A,
+        }
+    }
+}
+
 /// Happy Eyeballs v3 state machine
 pub struct HappyEyeballs {
-    /// Current state of the state machine
-    state: State,
+    dns_queries: Vec<DnsQuery>,
+    connection_attempts: Vec<()>,
     /// Network configuration
     network_config: NetworkConfig,
     // TODO: Split in host and port?
@@ -261,8 +306,9 @@ impl HappyEyeballs {
     /// Create a new Happy Eyeballs state machine with custom network configuration
     pub fn with_network_config(hostname: String, port: u16, network_config: NetworkConfig) -> Self {
         Self {
-            state: State::default(),
             network_config,
+            dns_queries: Vec::new(),
+            connection_attempts: Vec::new(),
             target: (hostname, port),
         }
     }
@@ -276,10 +322,8 @@ impl HappyEyeballs {
     /// or a timer output, then wait for the corresponding input before continuing.
     pub fn process(&mut self, input: Option<Input>, now: Instant) -> Option<Output> {
         // Handle input.
-        let output = match (&mut self.state, input) {
-            (State::Resolving { .. }, Some(Input::DnsResponse(response))) => {
-                self.on_dns_response(response)
-            }
+        let output = match input {
+            Some(Input::DnsResponse(response)) => self.on_dns_response(response),
             _ => None,
         };
         if output.is_some() {
@@ -302,94 +346,47 @@ impl HappyEyeballs {
     }
 
     fn send_dns_request(&mut self, now: Instant) -> Option<Output> {
-        match &mut self.state {
-            State::Resolving {
-                https_response,
-                aaaa_response,
-                a_response,
-            } => {
-                if matches!(https_response, ResolutionState::NotStarted) {
-                    *https_response = ResolutionState::InProgress { started: now };
-                    Some(Output::SendDnsQuery {
-                        hostname: self.target.0.clone(),
-                        record_type: DnsRecordType::Https,
-                    })
-                } else if matches!(aaaa_response, ResolutionState::NotStarted) {
-                    *aaaa_response = ResolutionState::InProgress { started: now };
-                    Some(Output::SendDnsQuery {
-                        hostname: self.target.0.clone(),
-                        record_type: DnsRecordType::Aaaa,
-                    })
-                } else if matches!(a_response, ResolutionState::NotStarted) {
-                    *a_response = ResolutionState::InProgress { started: now };
-                    Some(Output::SendDnsQuery {
-                        hostname: self.target.0.clone(),
-                        record_type: DnsRecordType::A,
-                    })
-                } else {
-                    None
-                }
+        for record_type in [DnsRecordType::Https, DnsRecordType::Aaaa, DnsRecordType::A] {
+            if !self
+                .dns_queries
+                .iter()
+                .any(|q| q.record_type() == record_type)
+            {
+                self.dns_queries.push(DnsQuery::InProgress {
+                    started: now,
+                    target_name: self.target.0.clone(),
+                    record_type,
+                });
+                return Some(Output::SendDnsQuery {
+                    hostname: self.target.0.clone(),
+                    record_type,
+                });
             }
-            State::Connecting => None,
         }
+
+        None
     }
 
     fn on_dns_response(&mut self, response: DnsResponse) -> Option<Output> {
-        let State::Resolving {
-            https_response,
-            aaaa_response,
-            a_response,
-        } = &mut self.state
+        let Some(query) = self
+            .dns_queries
+            .iter_mut()
+            .filter(|q| q.target_name() == response.target_name)
+            .find(|q| q.record_type() == response.record_type())
         else {
-            unreachable!();
+            debug_assert!(false, "got {response:?} but never sent query");
+            return None;
         };
 
-        match response {
-            DnsResponse::Https(dns_https_response) => {
-                assert!(matches!(
-                    *https_response,
-                    ResolutionState::InProgress { started: _ }
-                ));
-                match dns_https_response {
-                    DnsHttpsResponse::Positive {
-                        service_info: _,
-                    } => {
-                        *https_response = ResolutionState::CompletedPositive { value: () };
-                    }
-                    DnsHttpsResponse::Negative => {
-                        *https_response = ResolutionState::CompletedNegative;
-                    }
-                }
-            }
-            DnsResponse::Aaaa(dns_aaaa_response) => {
-                assert!(matches!(
-                    *aaaa_response,
-                    ResolutionState::InProgress { started: _ }
-                ));
-                match dns_aaaa_response {
-                    DnsAaaaResponse::Positive { addresses } => {
-                        *aaaa_response = ResolutionState::CompletedPositive { value: addresses };
-                    }
-                    DnsAaaaResponse::Negative => {
-                        *aaaa_response = ResolutionState::CompletedNegative;
-                    }
-                }
-            }
-            DnsResponse::A(dns_aresponse) => {
-                assert!(matches!(
-                    *a_response,
-                    ResolutionState::InProgress { started: _ }
-                ));
-                match dns_aresponse {
-                    DnsAResponse::Positive { addresses } => {
-                        *a_response = ResolutionState::CompletedPositive { value: addresses };
-                    }
-                    DnsAResponse::Negative => {
-                        *a_response = ResolutionState::CompletedNegative;
-                    }
-                }
+        match &query {
+            DnsQuery::InProgress { .. } => {}
+            DnsQuery::Completed { response } => {
+                debug_assert!(false, "got {response:?} for already responded {query:?}");
+                return None;
             }
         }
+
+        *query = DnsQuery::Completed { response };
 
         None
     }
@@ -423,97 +420,73 @@ impl HappyEyeballs {
     }
 
     fn connection_attempt_without_timeout(&mut self) -> Option<Output> {
-        let State::Resolving {
-            https_response,
-            aaaa_response,
-            a_response,
-        } = &self.state
-        else {
+        if self
+            .dns_queries
+            .iter()
+            .any(|q| q.target_name() != self.target.0)
+        {
+            debug_assert!(
+                false,
+                "function currently can't handle different target names"
+            );
             return None;
-        };
+        }
 
         // > Some positive (non-empty) address answers have been received AND
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        match (&aaaa_response, &a_response) {
-            (ResolutionState::CompletedPositive { .. }, _)
-            | (_, ResolutionState::CompletedPositive { .. }) => {}
-            _ => return None,
+        if self
+            .dns_queries
+            .iter()
+            .filter(|q| matches!(q, DnsQuery::Completed { .. }))
+            .filter(|q| q.positive())
+            .find(|q| matches!(q.record_type(), DnsRecordType::A | DnsRecordType::Aaaa))
+            .is_none()
+        {
+            return None;
         }
 
         // > A postive (non-empty) or negative (empty) answer has been received for the preferred address family that was queried AND
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        match (&self.network_config, &aaaa_response, &a_response) {
-            (
-                NetworkConfig::Ipv4Only,
-                _,
-                ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative,
-            ) => {}
-            (
-                NetworkConfig::Ipv6Only { .. },
-                ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative,
-                _,
-            ) => {}
-            (
-                NetworkConfig::DualStack { prefer_ipv6: false },
-                _,
-                ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative,
-            ) => {}
-            (
-                NetworkConfig::DualStack { prefer_ipv6: true },
-                ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative,
-                _,
-            ) => {}
-            _ => return None,
+        if self
+            .dns_queries
+            .iter()
+            .filter(|q| matches!(q, DnsQuery::Completed { .. }))
+            .find(|q| q.record_type() == self.network_config.preferred_dns_record_type())
+            .is_none()
+        {
+            return None;
         }
 
         // > SVCB/HTTPS service information has been received (or has received a negative response)
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        if !matches!(
-            https_response,
-            ResolutionState::CompletedPositive { .. } | ResolutionState::CompletedNegative
-        ) {
+        if self
+            .dns_queries
+            .iter()
+            .filter(|q| matches!(q, DnsQuery::Completed { .. }))
+            .find(|q| q.record_type() == DnsRecordType::Https)
+            .is_none()
+        {
             return None;
         }
 
-        let use_v6 = match self.network_config {
-            NetworkConfig::DualStack { prefer_ipv6 } => prefer_ipv6,
-            NetworkConfig::Ipv6Only { .. } => true,
-            NetworkConfig::Ipv4Only => false,
-        };
-
-        let address = match (use_v6, &aaaa_response, &a_response) {
-            (true, ResolutionState::CompletedPositive { value: addresses }, _) => {
-                SocketAddr::new(IpAddr::V6(addresses[0]), self.target.1)
-            }
-            (true, _, ResolutionState::CompletedPositive { value: addresses }) => {
-                SocketAddr::new(IpAddr::V4(addresses[0]), self.target.1)
-            }
-            (false, _, ResolutionState::CompletedPositive { value: addresses }) => {
-                SocketAddr::new(IpAddr::V4(addresses[0]), self.target.1)
-            }
-            (false, ResolutionState::CompletedPositive { value: addresses }, _) => {
-                SocketAddr::new(IpAddr::V6(addresses[0]), self.target.1)
-            }
-            _ => return None,
-        };
-
-        self.state = State::Connecting;
-
-        return Some(Output::AttemptConnection { address });
+        self.attempt_connection()
     }
 
     fn connection_attempt_with_timeout(&mut self, now: Instant) -> Option<Output> {
-        let State::Resolving {
-            https_response,
-            aaaa_response,
-            a_response,
-        } = &self.state
-        else {
+        if self
+            .dns_queries
+            .iter()
+            .any(|q| q.target_name() != self.target.0)
+        {
+            debug_assert!(
+                false,
+                "function currently can't handle different target names"
+            );
             return None;
-        };
+        }
 
         // > Or:
         // >
@@ -521,36 +494,72 @@ impl HappyEyeballs {
         // > - A resolution time delay has passed after which other answers have not been received
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        match https_response {
-            ResolutionState::InProgress { started }
-                if now.duration_since(*started) >= RESOLUTION_DELAY => {}
-            _ => return None,
-        }
-        match (aaaa_response, a_response) {
-            (ResolutionState::InProgress { started }, _)
-                if now.duration_since(*started) >= RESOLUTION_DELAY => {}
-            (_, ResolutionState::InProgress { started })
-                if now.duration_since(*started) >= RESOLUTION_DELAY => {}
-            _ => return None,
-        }
-        match (aaaa_response, a_response) {
-            (ResolutionState::CompletedPositive { value: addresses }, _) => {
-                let address = addresses[0];
-                self.state = State::Connecting;
-                return Some(Output::AttemptConnection {
-                    address: SocketAddr::new(IpAddr::V6(address), self.target.1),
-                });
-            }
-            (_, ResolutionState::CompletedPositive { value: addresses }) => {
-                let address = addresses[0];
-                self.state = State::Connecting;
-                return Some(Output::AttemptConnection {
-                    address: SocketAddr::new(IpAddr::V4(address), self.target.1),
-                });
-            }
-            _ => {}
+
+        let mut positive_responses = self
+            .dns_queries
+            .iter()
+            .filter_map(|q| q.get_response())
+            .filter(|r| r.positive())
+            .filter(|r| matches!(r.record_type(), DnsRecordType::Aaaa | DnsRecordType::A))
+            .peekable();
+
+        if positive_responses.peek().is_none() {
+            return None;
         }
 
-        return None;
+        let Some(https_query) = self
+            .dns_queries
+            .iter()
+            .find(|q| q.record_type() == DnsRecordType::Https)
+        else {
+            return None;
+        };
+        match https_query {
+            DnsQuery::InProgress {
+                started,
+                target_name,
+                record_type,
+            } if now.duration_since(*started) >= RESOLUTION_DELAY => {}
+            _ => {
+                return None;
+            }
+        }
+
+        self.attempt_connection()
+    }
+
+    fn attempt_connection(&mut self) -> Option<Output> {
+        let mut ips = self
+            .dns_queries
+            .iter()
+            .filter_map(|q| q.get_response())
+            .filter_map(|r| match &r.inner {
+                DnsResponseInner::Https(_) => None,
+                DnsResponseInner::Aaaa(ipv6_addrs) => Some(IpAddr::V6(
+                    ipv6_addrs.as_ref().ok()?.iter().next().cloned().unwrap(),
+                )),
+                DnsResponseInner::A(ipv4_addrs) => Some(IpAddr::V4(
+                    ipv4_addrs.as_ref().ok()?.iter().next().cloned().unwrap(),
+                )),
+            })
+            .collect::<Vec<_>>();
+        ips.sort_by(|a, b| {
+            if a.is_ipv6() == self.network_config.prefer_v6() {
+                return Ordering::Less;
+            }
+
+            if b.is_ipv6() == self.network_config.prefer_v6() {
+                return Ordering::Greater;
+            }
+
+            return Ordering::Equal;
+        });
+        self.connection_attempts.push(());
+        // TODO: Should we attempt connecting to HTTPS RR IP hints?
+
+        // TODO: What if we already made that connection attempt?
+        return Some(Output::AttemptConnection {
+            address: SocketAddr::new(ips.into_iter().next().unwrap(), self.target.1),
+        });
     }
 }
