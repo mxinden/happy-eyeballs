@@ -86,7 +86,7 @@ pub enum DnsHttpsResponse {
     // TODO: This needs a domain, such that we can match this response to the
     // request that we previously sent.
     Positive {
-        service_info: Option<ServiceInfo>,
+        service_info: Vec<ServiceInfo>,
     },
     Negative,
 }

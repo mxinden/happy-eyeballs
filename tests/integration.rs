@@ -28,7 +28,24 @@ impl HappyEyeballsExt for HappyEyeballs {
 
 fn in_dns_https_positive() -> Input {
     Input::DnsResponse(DnsResponse::Https(DnsHttpsResponse::Positive {
-        service_info: None,
+        service_info: vec![
+            happy_eyeballs::ServiceInfo {
+                priority: 1,
+                target_name: "svc1.example.com.".to_string(),
+                alpn_protocols: vec!["h3".to_string(), "h2".to_string()],
+                ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)],
+                ipv4_hints: vec![],
+                ech_config: None,
+            },
+            happy_eyeballs::ServiceInfo {
+                priority: 1,
+                target_name: "svc2.example.com.".to_string(),
+                alpn_protocols: vec!["h2".to_string()],
+                ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 4)],
+                ipv4_hints: vec![],
+                ech_config: None,
+            },
+        ],
     }))
 }
 
