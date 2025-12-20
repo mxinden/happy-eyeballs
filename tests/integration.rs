@@ -7,7 +7,8 @@ use happy_eyeballs::{
     DnsRecordType, DnsResponse, DnsResponseInner, HappyEyeballs, Input, NetworkConfig, Output,
 };
 
-const HOSTNAME: &str = "example.com";
+// TODO: Handle difference between com. and com? Use library for hostnames?!
+const HOSTNAME: &str = "example.com.";
 const PORT: u16 = 443;
 const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
 const V4_ADDR: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);
@@ -20,66 +21,70 @@ impl HappyEyeballsExt for HappyEyeballs {
     fn expect(&mut self, input_output: Vec<(Option<Input>, Option<Output>)>, now: Instant) {
         for (input, expected_output) in input_output {
             let output = self.process(input, now);
-            assert_eq!(output, expected_output);
+            assert_eq!(expected_output, output);
         }
     }
 }
 
 fn in_dns_https_positive() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com".to_string(),
-        inner: DnsResponseInner::Https(Ok(vec![
-            happy_eyeballs::ServiceInfo {
-                priority: 1,
-                target_name: "svc1.example.com.".to_string(),
-                alpn_protocols: vec!["h3".to_string(), "h2".to_string()],
-                ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)],
-                ipv4_hints: vec![],
-                ech_config: None,
-            },
-            happy_eyeballs::ServiceInfo {
-                priority: 1,
-                target_name: "svc2.example.com.".to_string(),
-                alpn_protocols: vec!["h2".to_string()],
-                ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 4)],
-                ipv4_hints: vec![],
-                ech_config: None,
-            },
-        ])),
+        target_name: "example.com.".to_string(),
+        inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+            priority: 1,
+            target_name: "example.com..".to_string(),
+            alpn_protocols: vec!["h3".to_string(), "h2".to_string()],
+            ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)],
+            ipv4_hints: vec![],
+            ech_config: None,
+        }])),
+    })
+}
+
+fn in_dns_https_positive_svc1() -> Input {
+    Input::DnsResponse(DnsResponse {
+        target_name: "example.com.".to_string(),
+        inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+            priority: 1,
+            target_name: "svc1.example.com.".to_string(),
+            alpn_protocols: vec!["h3".to_string(), "h2".to_string()],
+            ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)],
+            ipv4_hints: vec![],
+            ech_config: None,
+        }])),
     })
 }
 
 fn in_dns_https_negative() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com".to_string(),
+        target_name: "example.com.".to_string(),
         inner: DnsResponseInner::Https(Err(())),
     })
 }
 
 fn in_dns_aaaa_positive() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com".to_string(),
+        target_name: "example.com.".to_string(),
         inner: DnsResponseInner::Aaaa(Ok(vec![V6_ADDR])),
     })
 }
 
 fn in_dns_a_positive() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com".to_string(),
+        target_name: "example.com.".to_string(),
         inner: DnsResponseInner::A(Ok(vec![V4_ADDR])),
     })
 }
 
 fn in_dns_aaaa_negative() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com".to_string(),
+        target_name: "example.com.".to_string(),
         inner: DnsResponseInner::Aaaa(Err(())),
     })
 }
 
 fn in_dns_a_negative() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com".to_string(),
+        target_name: "example.com.".to_string(),
         inner: DnsResponseInner::A(Err(())),
     })
 }
@@ -94,6 +99,13 @@ fn out_send_dns_https() -> Output {
 fn out_send_dns_aaaa() -> Output {
     Output::SendDnsQuery {
         hostname: HOSTNAME.to_string(),
+        record_type: DnsRecordType::Aaaa,
+    }
+}
+
+fn out_send_dns_svc1() -> Output {
+    Output::SendDnsQuery {
+        hostname: "svc1.example.com.".to_string(),
         record_type: DnsRecordType::Aaaa,
     }
 }
@@ -318,6 +330,19 @@ mod section_4_hostname_resolution {
     #[test]
     #[ignore]
     fn https_hints_still_query_a_aaaa() {
-        todo!();
+        let (now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                (
+                    Some(in_dns_https_positive_svc1()),
+                    Some(out_send_dns_svc1()),
+                ),
+            ],
+            now,
+        );
     }
 }

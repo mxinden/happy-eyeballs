@@ -342,6 +342,11 @@ impl HappyEyeballs {
             return output;
         }
 
+        let output = self.send_dns_request_for_target_name(now);
+        if output.is_some() {
+            return output;
+        }
+
         None
     }
 
@@ -361,6 +366,52 @@ impl HappyEyeballs {
                     hostname: self.target.0.clone(),
                     record_type,
                 });
+            }
+        }
+
+        None
+    }
+
+    /// > Note that clients are still required to issue A and AAAA queries
+    /// > for those TargetNames if they haven't yet received those records.
+    ///
+    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
+    fn send_dns_request_for_target_name(&mut self, now: Instant) -> Option<Output> {
+        // Check if we have HTTPS response with ServiceInfo
+        let target_names = self
+            .dns_queries
+            .iter()
+            .filter_map(|q| match q {
+                DnsQuery::Completed {
+                    response:
+                        DnsResponse {
+                            target_name: _,
+                            inner: DnsResponseInner::Https(Ok(service_infos)),
+                        },
+                } => Some(service_infos.iter().map(|i| &i.target_name)),
+                _ => None,
+            })
+            .flatten();
+
+        for target_name in target_names {
+            for record_type in [DnsRecordType::Aaaa, DnsRecordType::A] {
+                if !self
+                    .dns_queries
+                    .iter()
+                    .any(|q| q.target_name() == target_name && q.record_type() == record_type)
+                {
+                    let target_name = target_name.to_string();
+
+                    self.dns_queries.push(DnsQuery::InProgress {
+                        started: now,
+                        target_name: target_name.clone(),
+                        record_type,
+                    });
+                    return Some(Output::SendDnsQuery {
+                        hostname: target_name.clone(),
+                        record_type,
+                    });
+                }
             }
         }
 
