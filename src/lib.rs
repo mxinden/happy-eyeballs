@@ -73,10 +73,11 @@ pub enum Input {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DnsResponse {
-    // TODO: Replace string with TargetName type.
-    pub target_name: String,
+    pub target_name: TargetName,
     pub inner: DnsResponseInner,
 }
+
+
 
 impl DnsResponse {
     fn record_type(&self) -> DnsRecordType {
@@ -113,12 +114,21 @@ impl DnsResponseInner {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TargetName(String);
+
+impl From<&str> for TargetName {
+    fn from(s: &str) -> Self {
+        TargetName(s.to_string())
+    }
+}
+
 /// Output events from the Happy Eyeballs state machine
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
     /// Send a DNS query
     SendDnsQuery {
-        hostname: String,
+        hostname: TargetName,
         record_type: DnsRecordType,
     },
 
@@ -164,7 +174,7 @@ pub enum TimerType {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServiceInfo {
     pub priority: u16,
-    pub target_name: String,
+    pub target_name: TargetName,
     pub alpn_protocols: Vec<String>,
     pub ech_config: Option<Vec<u8>>,
     pub ipv4_hints: Vec<Ipv4Addr>,
@@ -175,7 +185,7 @@ pub struct ServiceInfo {
 enum DnsQuery {
     InProgress {
         started: Instant,
-        target_name: String,
+        target_name: TargetName,
         record_type: DnsRecordType,
     },
     Completed {
@@ -195,7 +205,7 @@ impl DnsQuery {
         }
     }
 
-    fn target_name(&self) -> &str {
+    fn target_name(&self) -> &TargetName {
         match self {
             DnsQuery::InProgress { target_name, .. } => target_name,
             DnsQuery::Completed { response } => &response.target_name,
@@ -294,7 +304,7 @@ pub struct HappyEyeballs {
     network_config: NetworkConfig,
     // TODO: Split in host and port?
     /// Target hostname and port
-    target: (String, u16),
+    target: (TargetName, u16),
 }
 
 impl HappyEyeballs {
@@ -309,7 +319,7 @@ impl HappyEyeballs {
             network_config,
             dns_queries: Vec::new(),
             connection_attempts: Vec::new(),
-            target: (hostname, port),
+            target: (TargetName(hostname), port),
         }
     }
 
@@ -330,6 +340,7 @@ impl HappyEyeballs {
             return output;
         }
 
+        // TODO: Move below self.connection_attempt()?
         // Send DNS queries.
         let output = self.send_dns_request(now);
         if output.is_some() {
@@ -400,7 +411,8 @@ impl HappyEyeballs {
                     .iter()
                     .any(|q| q.target_name() == target_name && q.record_type() == record_type)
                 {
-                    let target_name = target_name.to_string();
+
+                    let target_name = self.target.0.clone();
 
                     self.dns_queries.push(DnsQuery::InProgress {
                         started: now,
@@ -408,7 +420,7 @@ impl HappyEyeballs {
                         record_type,
                     });
                     return Some(Output::SendDnsQuery {
-                        hostname: target_name.clone(),
+                        hostname: target_name,
                         record_type,
                     });
                 }
@@ -422,7 +434,7 @@ impl HappyEyeballs {
         let Some(query) = self
             .dns_queries
             .iter_mut()
-            .filter(|q| q.target_name() == response.target_name)
+            .filter(|q| *q.target_name() == response.target_name)
             .find(|q| q.record_type() == response.record_type())
         else {
             debug_assert!(false, "got {response:?} but never sent query");
@@ -474,7 +486,7 @@ impl HappyEyeballs {
         if self
             .dns_queries
             .iter()
-            .any(|q| q.target_name() != self.target.0)
+            .any(|q| *q.target_name() != self.target.0)
         {
             debug_assert!(
                 false,
@@ -530,7 +542,7 @@ impl HappyEyeballs {
         if self
             .dns_queries
             .iter()
-            .any(|q| q.target_name() != self.target.0)
+            .any(|q| *q.target_name() != self.target.0)
         {
             debug_assert!(
                 false,
