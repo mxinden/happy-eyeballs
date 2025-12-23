@@ -479,7 +479,7 @@ impl HappyEyeballs {
     }
 
     /// > The client moves onto sorting addresses and establishing connections
-    /// once one of the following condition sets is met:
+    /// > once one of the following condition sets is met:
     /// >
     /// > Either:
     /// >  
@@ -527,27 +527,17 @@ impl HappyEyeballs {
                     .any(|(attempted_ip, _)| attempted_ip == ip)
             })
             .collect::<Vec<_>>();
-        ips.sort_by(|a, b| {
-            if a.is_ipv6() == self.network_config.prefer_v6() {
-                return Ordering::Less;
-            }
-
-            if b.is_ipv6() == self.network_config.prefer_v6() {
-                return Ordering::Greater;
-            }
-
-            return Ordering::Equal;
-        });
+        ips.sort_by_key(|ip| (ip.is_ipv6() != self.network_config.prefer_v6()) as u8);
 
         let ip = ips.into_iter().next().unwrap();
 
-        self.connection_attempts.push((ip.clone(), now));
+        self.connection_attempts.push((ip, now));
         // TODO: Should we attempt connecting to HTTPS RR IP hints?
 
         // TODO: What if we already made that connection attempt?
-        return Some(Output::AttemptConnection {
+        Some(Output::AttemptConnection {
             address: SocketAddr::new(ip, self.target.1),
-        });
+        })
     }
 
     /// Whether to move on to the connection attempt phase based on the received
@@ -568,13 +558,12 @@ impl HappyEyeballs {
         // > Some positive (non-empty) address answers have been received AND
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        if self
+        if !self
             .dns_queries
             .iter()
             .filter(|q| matches!(q, DnsQuery::Completed { .. }))
             .filter(|q| q.positive())
-            .find(|q| matches!(q.record_type(), DnsRecordType::A | DnsRecordType::Aaaa))
-            .is_none()
+            .any(|q| matches!(q.record_type(), DnsRecordType::A | DnsRecordType::Aaaa))
         {
             return false;
         }
@@ -583,12 +572,11 @@ impl HappyEyeballs {
         // > for the preferred address family that was queried AND
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        if self
+        if !self
             .dns_queries
             .iter()
             .filter(|q| matches!(q, DnsQuery::Completed { .. }))
-            .find(|q| q.record_type() == self.network_config.preferred_dns_record_type())
-            .is_none()
+            .any(|q| q.record_type() == self.network_config.preferred_dns_record_type())
         {
             return false;
         }
@@ -596,12 +584,11 @@ impl HappyEyeballs {
         // > SVCB/HTTPS service information has been received (or has received a negative response)
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        if self
+        if !self
             .dns_queries
             .iter()
             .filter(|q| matches!(q, DnsQuery::Completed { .. }))
-            .find(|q| q.record_type() == DnsRecordType::Https)
-            .is_none()
+            .any(|q| q.record_type() == DnsRecordType::Https)
         {
             return false;
         }

@@ -208,7 +208,7 @@ mod section_4_hostname_resolution {
     /// >
     /// > - Some positive (non-empty) address answers have been received AND
     /// > - A postive (non-empty) or negative (empty) answer has been
-    ///     received for the preferred address family that was queried AND
+    /// >   received for the preferred address family that was queried AND
     /// > - SVCB/HTTPS service information has been received (or has received a negative response)
     ///
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
