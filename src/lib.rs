@@ -41,7 +41,7 @@ pub const RESOLUTION_DELAY: Duration = Duration::from_millis(50);
 
 /// > Connection Attempt Delay (Section 6): The time to wait between connection
 /// > attempts in the absence of RTT data. Recommended to be 250 milliseconds.
-/// 
+///
 /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-9>
 pub const CONNECTION_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
 
@@ -472,130 +472,18 @@ impl HappyEyeballs {
     ///
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
     fn connection_attempt(&mut self, now: Instant) -> Option<Output> {
-        // First try without timeout.
-        if let Some(output) = self.connection_attempt_without_timeout(now) {
-            return Some(output);
+        let mut move_on = false;
+        move_on |= self.move_on_without_timeout();
+        move_on |= self.move_on_with_timeout(now);
+        if !move_on {
+            return None;
         }
 
-        // Then try with timeout.
-        if let Some(output) = self.connection_attempt_with_timeout(now) {
-            return Some(output);
-        }
-
-        None
-    }
-
-    fn connection_attempt_without_timeout(&mut self, now: Instant) -> Option<Output> {
         if self
-            .dns_queries
+            .connection_attempts
             .iter()
-            .any(|q| *q.target_name() != self.target.0)
+            .any(|(_, t)| now.duration_since(*t) < CONNECTION_ATTEMPT_DELAY)
         {
-            debug_assert!(
-                false,
-                "function currently can't handle different target names"
-            );
-            return None;
-        }
-
-        // > Some positive (non-empty) address answers have been received AND
-        //
-        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        if self
-            .dns_queries
-            .iter()
-            .filter(|q| matches!(q, DnsQuery::Completed { .. }))
-            .filter(|q| q.positive())
-            .find(|q| matches!(q.record_type(), DnsRecordType::A | DnsRecordType::Aaaa))
-            .is_none()
-        {
-            return None;
-        }
-
-        // > A postive (non-empty) or negative (empty) answer has been received for the preferred address family that was queried AND
-        //
-        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        if self
-            .dns_queries
-            .iter()
-            .filter(|q| matches!(q, DnsQuery::Completed { .. }))
-            .find(|q| q.record_type() == self.network_config.preferred_dns_record_type())
-            .is_none()
-        {
-            return None;
-        }
-
-        // > SVCB/HTTPS service information has been received (or has received a negative response)
-        //
-        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        if self
-            .dns_queries
-            .iter()
-            .filter(|q| matches!(q, DnsQuery::Completed { .. }))
-            .find(|q| q.record_type() == DnsRecordType::Https)
-            .is_none()
-        {
-            return None;
-        }
-
-        self.attempt_connection(now)
-    }
-
-    fn connection_attempt_with_timeout(&mut self, now: Instant) -> Option<Output> {
-        if self
-            .dns_queries
-            .iter()
-            .any(|q| *q.target_name() != self.target.0)
-        {
-            debug_assert!(
-                false,
-                "function currently can't handle different target names"
-            );
-            return None;
-        }
-
-        // > Or:
-        // >
-        // > - Some positive (non-empty) address answers have been received AND
-        // > - A resolution time delay has passed after which other answers have not been received
-        //
-        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-
-        let mut positive_responses = self
-            .dns_queries
-            .iter()
-            .filter_map(|q| q.get_response())
-            .filter(|r| r.positive())
-            .filter(|r| matches!(r.record_type(), DnsRecordType::Aaaa | DnsRecordType::A))
-            .peekable();
-
-        if positive_responses.peek().is_none() {
-            return None;
-        }
-
-        let Some(https_query) = self
-            .dns_queries
-            .iter()
-            .find(|q| q.record_type() == DnsRecordType::Https)
-        else {
-            return None;
-        };
-        match https_query {
-            DnsQuery::InProgress {
-                started,
-                target_name,
-                record_type,
-            } if now.duration_since(*started) >= RESOLUTION_DELAY => {}
-            _ => {
-                return None;
-            }
-        }
-
-        self.attempt_connection(now)
-    }
-
-    fn attempt_connection(&mut self, now: Instant) -> Option<Output> {
-        if self.connection_attempts.iter().any(|(_, t)| now.duration_since(*t) < CONNECTION_ATTEMPT_DELAY) {
             return None;
         }
         let mut ips = self
@@ -639,5 +527,118 @@ impl HappyEyeballs {
         return Some(Output::AttemptConnection {
             address: SocketAddr::new(ip, self.target.1),
         });
+    }
+
+    /// Whether to move on to the connection attempt phase based on the received
+    /// DNS responses, not based on a timeout.
+    fn move_on_without_timeout(&mut self) -> bool {
+        if self
+            .dns_queries
+            .iter()
+            .any(|q| *q.target_name() != self.target.0)
+        {
+            debug_assert!(
+                false,
+                "function currently can't handle different target names"
+            );
+            return false;
+        }
+
+        // > Some positive (non-empty) address answers have been received AND
+        //
+        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+        if self
+            .dns_queries
+            .iter()
+            .filter(|q| matches!(q, DnsQuery::Completed { .. }))
+            .filter(|q| q.positive())
+            .find(|q| matches!(q.record_type(), DnsRecordType::A | DnsRecordType::Aaaa))
+            .is_none()
+        {
+            return false;
+        }
+
+        // > A postive (non-empty) or negative (empty) answer has been received
+        // > for the preferred address family that was queried AND
+        //
+        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+        if self
+            .dns_queries
+            .iter()
+            .filter(|q| matches!(q, DnsQuery::Completed { .. }))
+            .find(|q| q.record_type() == self.network_config.preferred_dns_record_type())
+            .is_none()
+        {
+            return false;
+        }
+
+        // > SVCB/HTTPS service information has been received (or has received a negative response)
+        //
+        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+        if self
+            .dns_queries
+            .iter()
+            .filter(|q| matches!(q, DnsQuery::Completed { .. }))
+            .find(|q| q.record_type() == DnsRecordType::Https)
+            .is_none()
+        {
+            return false;
+        }
+
+        true
+    }
+
+    /// Whether to move on to the connection attempt phase based on a timeout.
+    fn move_on_with_timeout(&mut self, now: Instant) -> bool {
+        if self
+            .dns_queries
+            .iter()
+            .any(|q| *q.target_name() != self.target.0)
+        {
+            debug_assert!(
+                false,
+                "function currently can't handle different target names"
+            );
+            return false;
+        }
+
+        // > Or:
+        // >
+        // > - Some positive (non-empty) address answers have been received AND
+        // > - A resolution time delay has passed after which other answers have not been received
+        //
+        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+
+        let mut positive_responses = self
+            .dns_queries
+            .iter()
+            .filter_map(|q| q.get_response())
+            .filter(|r| r.positive())
+            .filter(|r| matches!(r.record_type(), DnsRecordType::Aaaa | DnsRecordType::A))
+            .peekable();
+
+        if positive_responses.peek().is_none() {
+            return false;
+        }
+
+        let Some(https_query) = self
+            .dns_queries
+            .iter()
+            .find(|q| q.record_type() == DnsRecordType::Https)
+        else {
+            return false;
+        };
+        match https_query {
+            DnsQuery::InProgress {
+                started,
+                target_name,
+                record_type,
+            } if now.duration_since(*started) >= RESOLUTION_DELAY => {}
+            _ => {
+                return false;
+            }
+        }
+
+        true
     }
 }
