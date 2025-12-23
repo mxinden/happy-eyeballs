@@ -30,7 +30,6 @@
 //! }
 //! ```
 
-use std::cmp::Ordering;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
@@ -436,7 +435,7 @@ impl HappyEyeballs {
                     .iter()
                     .any(|q| q.target_name() == target_name && q.record_type() == record_type)
                 {
-                    let target_name = self.target.0.clone();
+                    let target_name = target_name.clone();
 
                     self.dns_queries.push(DnsQuery::InProgress {
                         started: now,

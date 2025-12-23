@@ -348,7 +348,6 @@ mod section_4_hostname_resolution {
     ///
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
     #[test]
-    #[ignore]
     fn https_hints_still_query_a_aaaa() {
         let (now, mut he) = setup();
 
