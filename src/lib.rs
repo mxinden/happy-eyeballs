@@ -231,8 +231,42 @@ impl DnsQuery {
     }
 }
 
-// TODO: We need to track what HTTP versions are supported, e.g. whether HTTP/3
-// is disabled via pref or not. H1, H2, H3.
+/// Configuration for supported HTTP versions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HttpVersions {
+    /// Whether HTTP/1.1 is enabled.
+    pub h1: bool,
+    /// Whether HTTP/2 is enabled.
+    pub h2: bool,
+    /// Whether HTTP/3 is enabled.
+    pub h3: bool,
+}
+
+impl Default for HttpVersions {
+    fn default() -> Self {
+        // Enable all by default.
+        Self {
+            h1: true,
+            h2: true,
+            h3: true,
+        }
+    }
+}
+
+/// IP connectivity and preference mode.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IpPreference {
+    /// Dual-stack available, prefer IPv6 over IPv4.
+    DualStackPreferV6,
+    /// Dual-stack available, prefer IPv4 over IPv6.
+    DualStackPreferV4,
+    /// IPv6-only network.
+    Ipv6Only,
+    /// IPv4-only network.
+    Ipv4Only,
+}
+
+// TODO: Allow user to provide alt-svc information from previous connections.
 //
 // TODO: We need to track whether HTTP RR DNS is enabled or disabled.
 //
@@ -255,47 +289,34 @@ impl DnsQuery {
 //
 /// Network configuration for Happy Eyeballs behavior
 #[derive(Debug, Clone, PartialEq)]
-pub enum NetworkConfig {
-    /// Dual-stack network with IPv4 and IPv6 available
-    DualStack {
-        /// Whether to prefer IPv6 over IPv4
-        prefer_ipv6: bool,
-    },
-    /// IPv6-only network requiring NAT64 for IPv4 connectivity
-    Ipv6Only {
-        /// NAT64 prefix for address synthesis
-        nat64_prefix: Option<Ipv6Addr>,
-    },
-    /// IPv4-only network
-    Ipv4Only,
+pub struct NetworkConfig {
+    /// Supported HTTP versions
+    pub http_versions: HttpVersions,
+    /// IP connectivity and preference
+    pub ip: IpPreference,
 }
 
 impl Default for NetworkConfig {
     fn default() -> Self {
-        NetworkConfig::DualStack { prefer_ipv6: true }
+        NetworkConfig {
+            http_versions: HttpVersions::default(),
+            ip: IpPreference::DualStackPreferV6,
+        }
     }
 }
 
 impl NetworkConfig {
     fn prefer_v6(&self) -> bool {
-        match self {
-            NetworkConfig::DualStack { prefer_ipv6 } => *prefer_ipv6,
-            NetworkConfig::Ipv6Only { .. } => true,
-            NetworkConfig::Ipv4Only => false,
+        match self.ip {
+            IpPreference::DualStackPreferV6 | IpPreference::Ipv6Only => true,
+            IpPreference::DualStackPreferV4 | IpPreference::Ipv4Only => false,
         }
     }
 
     fn preferred_dns_record_type(&self) -> DnsRecordType {
-        match self {
-            NetworkConfig::DualStack { prefer_ipv6 } => {
-                if *prefer_ipv6 {
-                    DnsRecordType::Aaaa
-                } else {
-                    DnsRecordType::A
-                }
-            }
-            NetworkConfig::Ipv6Only { .. } => DnsRecordType::Aaaa,
-            NetworkConfig::Ipv4Only => DnsRecordType::A,
+        match self.ip {
+            IpPreference::DualStackPreferV6 | IpPreference::Ipv6Only => DnsRecordType::Aaaa,
+            IpPreference::DualStackPreferV4 | IpPreference::Ipv4Only => DnsRecordType::A,
         }
     }
 }

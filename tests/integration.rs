@@ -4,7 +4,8 @@ use std::{
 };
 
 use happy_eyeballs::{
-    DnsRecordType, DnsResponse, DnsResponseInner, HappyEyeballs, Input, NetworkConfig, Output,
+    DnsRecordType, DnsResponse, DnsResponseInner, HappyEyeballs, HttpVersions, Input, IpPreference,
+    NetworkConfig, Output,
 };
 
 // TODO: Handle difference between com. and com? Use library for hostnames?!
@@ -224,42 +225,60 @@ mod section_4_hostname_resolution {
         let test_cases = vec![
             // V6 preferred, V6 positive, HTTPS positive, expect V6 connection attempt
             Case {
-                address_family: NetworkConfig::DualStack { prefer_ipv6: true },
+                address_family: NetworkConfig {
+                    http_versions: HttpVersions::default(),
+                    ip: IpPreference::DualStackPreferV6,
+                },
                 positive: in_dns_aaaa_positive(),
                 preferred: None,
                 expected: Some(out_attempt_v6()),
             },
             // V6 preferred, V4 positive, V6 positive, HTTPS positive, expect V6 connection attempt
             Case {
-                address_family: NetworkConfig::DualStack { prefer_ipv6: true },
+                address_family: NetworkConfig {
+                    http_versions: HttpVersions::default(),
+                    ip: IpPreference::DualStackPreferV6,
+                },
                 positive: in_dns_a_positive(),
                 preferred: Some(in_dns_aaaa_positive()),
                 expected: Some(out_attempt_v6()),
             },
             // V6 preferred, V6 negative, V4 positive, HTTPS positive, expect V4 connection attempt
             Case {
-                address_family: NetworkConfig::DualStack { prefer_ipv6: true },
+                address_family: NetworkConfig {
+                    http_versions: HttpVersions::default(),
+                    ip: IpPreference::DualStackPreferV6,
+                },
                 positive: in_dns_a_positive(),
                 preferred: Some(in_dns_aaaa_negative()),
                 expected: Some(out_attempt_v4()),
             },
             // V4 preferred, V4 positive, HTTPS positive, expect V4 connection attempt
             Case {
-                address_family: NetworkConfig::DualStack { prefer_ipv6: false },
+                address_family: NetworkConfig {
+                    http_versions: HttpVersions::default(),
+                    ip: IpPreference::DualStackPreferV4,
+                },
                 positive: in_dns_a_positive(),
                 preferred: None,
                 expected: Some(out_attempt_v4()),
             },
             // V4 preferred, V6 positive, V4 positive, HTTPS positive, expect V4 connection attempt
             Case {
-                address_family: NetworkConfig::DualStack { prefer_ipv6: false },
+                address_family: NetworkConfig {
+                    http_versions: HttpVersions::default(),
+                    ip: IpPreference::DualStackPreferV4,
+                },
                 positive: in_dns_aaaa_positive(),
                 preferred: Some(in_dns_a_positive()),
                 expected: Some(out_attempt_v4()),
             },
             // V4 preferred, V4 negative, V6 positive, HTTPS positive, expect V6 connection attempt
             Case {
-                address_family: NetworkConfig::DualStack { prefer_ipv6: false },
+                address_family: NetworkConfig {
+                    http_versions: HttpVersions::default(),
+                    ip: IpPreference::DualStackPreferV4,
+                },
                 positive: in_dns_aaaa_positive(),
                 preferred: Some(in_dns_a_negative()),
                 expected: Some(out_attempt_v6()),
