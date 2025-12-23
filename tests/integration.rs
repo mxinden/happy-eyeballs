@@ -31,7 +31,7 @@ fn in_dns_https_positive() -> Input {
         target_name: "example.com.".into(),
         inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
-            target_name: "example.com..".into(),
+            target_name: "example.com.".into(),
             alpn_protocols: vec!["h3".to_string(), "h2".to_string()],
             ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)],
             ipv4_hints: vec![],
