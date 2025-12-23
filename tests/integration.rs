@@ -146,6 +146,7 @@ fn initial_state() {
     he.expect(vec![(None, Some(out_send_dns_https()))], now);
 }
 
+// TODO: Move to own file?
 /// > 4. Hostname Resolution
 ///
 /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4>
@@ -344,5 +345,33 @@ mod section_4_hostname_resolution {
             ],
             now,
         );
+    }
+}
+
+// TODO: Move to own file?
+mod section_6_connection_attempts {
+    use happy_eyeballs::CONNECTION_ATTEMPT_DELAY;
+
+    use super::*;
+
+    #[test]
+    fn connection_attempt_delay() {
+        let (mut now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                (Some(in_dns_https_positive()), None),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                (Some(in_dns_a_positive()), None),
+            ],
+            now,
+        );
+
+        now += CONNECTION_ATTEMPT_DELAY;
+
+        he.expect(vec![(None, Some(out_attempt_v4()))], now);
     }
 }

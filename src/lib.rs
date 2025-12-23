@@ -39,6 +39,12 @@ use std::time::{Duration, Instant};
 /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
 pub const RESOLUTION_DELAY: Duration = Duration::from_millis(50);
 
+/// > Connection Attempt Delay (Section 6): The time to wait between connection
+/// > attempts in the absence of RTT data. Recommended to be 250 milliseconds.
+/// 
+/// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-9>
+pub const CONNECTION_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
+
 /// Input events to the Happy Eyeballs state machine
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
@@ -76,8 +82,6 @@ pub struct DnsResponse {
     pub target_name: TargetName,
     pub inner: DnsResponseInner,
 }
-
-
 
 impl DnsResponse {
     fn record_type(&self) -> DnsRecordType {
@@ -299,7 +303,7 @@ impl NetworkConfig {
 /// Happy Eyeballs v3 state machine
 pub struct HappyEyeballs {
     dns_queries: Vec<DnsQuery>,
-    connection_attempts: Vec<()>,
+    connection_attempts: Vec<(IpAddr, Instant)>,
     /// Network configuration
     network_config: NetworkConfig,
     // TODO: Split in host and port?
@@ -411,7 +415,6 @@ impl HappyEyeballs {
                     .iter()
                     .any(|q| q.target_name() == target_name && q.record_type() == record_type)
                 {
-
                     let target_name = self.target.0.clone();
 
                     self.dns_queries.push(DnsQuery::InProgress {
@@ -470,7 +473,7 @@ impl HappyEyeballs {
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
     fn connection_attempt(&mut self, now: Instant) -> Option<Output> {
         // First try without timeout.
-        if let Some(output) = self.connection_attempt_without_timeout() {
+        if let Some(output) = self.connection_attempt_without_timeout(now) {
             return Some(output);
         }
 
@@ -482,7 +485,7 @@ impl HappyEyeballs {
         None
     }
 
-    fn connection_attempt_without_timeout(&mut self) -> Option<Output> {
+    fn connection_attempt_without_timeout(&mut self, now: Instant) -> Option<Output> {
         if self
             .dns_queries
             .iter()
@@ -535,7 +538,7 @@ impl HappyEyeballs {
             return None;
         }
 
-        self.attempt_connection()
+        self.attempt_connection(now)
     }
 
     fn connection_attempt_with_timeout(&mut self, now: Instant) -> Option<Output> {
@@ -588,10 +591,13 @@ impl HappyEyeballs {
             }
         }
 
-        self.attempt_connection()
+        self.attempt_connection(now)
     }
 
-    fn attempt_connection(&mut self) -> Option<Output> {
+    fn attempt_connection(&mut self, now: Instant) -> Option<Output> {
+        if self.connection_attempts.iter().any(|(_, t)| now.duration_since(*t) < CONNECTION_ATTEMPT_DELAY) {
+            return None;
+        }
         let mut ips = self
             .dns_queries
             .iter()
@@ -605,6 +611,12 @@ impl HappyEyeballs {
                     ipv4_addrs.as_ref().ok()?.iter().next().cloned().unwrap(),
                 )),
             })
+            .filter(|ip| {
+                !self
+                    .connection_attempts
+                    .iter()
+                    .any(|(attempted_ip, _)| attempted_ip == ip)
+            })
             .collect::<Vec<_>>();
         ips.sort_by(|a, b| {
             if a.is_ipv6() == self.network_config.prefer_v6() {
@@ -617,12 +629,15 @@ impl HappyEyeballs {
 
             return Ordering::Equal;
         });
-        self.connection_attempts.push(());
+
+        let ip = ips.into_iter().next().unwrap();
+
+        self.connection_attempts.push((ip.clone(), now));
         // TODO: Should we attempt connecting to HTTPS RR IP hints?
 
         // TODO: What if we already made that connection attempt?
         return Some(Output::AttemptConnection {
-            address: SocketAddr::new(ips.into_iter().next().unwrap(), self.target.1),
+            address: SocketAddr::new(ip, self.target.1),
         });
     }
 }
