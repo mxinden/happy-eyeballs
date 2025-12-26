@@ -36,7 +36,21 @@ fn in_dns_https_positive() -> Input {
             priority: 1,
             target_name: "example.com.".into(),
             alpn_protocols: vec!["h3".to_string(), "h2".to_string()],
-            ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)],
+            ipv6_hints: vec![],
+            ipv4_hints: vec![],
+            ech_config: None,
+        }])),
+    })
+}
+
+fn in_dns_https_positive_v6_hints() -> Input {
+    Input::DnsResponse(DnsResponse {
+        target_name: "example.com.".into(),
+        inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+            priority: 1,
+            target_name: "example.com.".into(),
+            alpn_protocols: vec!["h3".to_string(), "h2".to_string()],
+            ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)],
             ipv4_hints: vec![],
             ech_config: None,
         }])),
@@ -340,9 +354,23 @@ mod section_4_hostname_resolution {
     ///
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
     #[test]
-    #[ignore]
     fn https_hints() {
-        todo!();
+        let (now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                (Some(in_dns_aaaa_negative()), None),
+                (Some(in_dns_a_negative()), None),
+                (
+                    Some(in_dns_https_positive_v6_hints()),
+                    Some(out_attempt_v6()),
+                ),
+            ],
+            now,
+        );
     }
 
     /// > Note that clients are still required to issue A and AAAA queries

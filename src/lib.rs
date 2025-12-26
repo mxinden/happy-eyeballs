@@ -511,7 +511,66 @@ impl HappyEyeballs {
             .iter()
             .filter_map(|q| q.get_response())
             .filter_map(|r| match &r.inner {
-                DnsResponseInner::Https(_) => None,
+                DnsResponseInner::Https(infos) => {
+                    // > ServiceMode records can contain address hints via ipv6hint and
+                    // > ipv4hint parameters. When these are received, they SHOULD be
+                    // > considered as positive non-empty answers for the purpose of the
+                    // > algorithm when A and AAAA records corresponding to the TargetName
+                    // > are not available yet.
+                    //
+                    // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
+                    let got_a = self
+                        .dns_queries
+                        .iter()
+                        .filter(|q| *q.target_name() == self.target.0)
+                        .any(|q| {
+                            matches!(
+                                q,
+                                DnsQuery::Completed {
+                                    response:
+                                        DnsResponse {
+                                            inner: DnsResponseInner::A(Ok(addrs)),
+                                            ..
+                                        },
+                                } if !addrs.is_empty()
+                            )
+                        });
+                    let got_aaaa = self
+                        .dns_queries
+                        .iter()
+                        .filter(|q| *q.target_name() == self.target.0)
+                        .any(|q| {
+                            matches!(
+                                q,
+                                DnsQuery::Completed {
+                                    response:
+                                        DnsResponse {
+                                            inner: DnsResponseInner::Aaaa(Ok(addrs)),
+                                            ..
+                                        },
+                                } if !addrs.is_empty()
+                            )
+                        });
+                    Some(
+                        infos
+                            .as_ref()
+                            .ok()?
+                            .iter()
+                            .flat_map(|info| {
+                                info.ipv6_hints
+                                    .iter()
+                                    .cloned()
+                                    .map(IpAddr::V6)
+                                    .chain(info.ipv4_hints.iter().cloned().map(IpAddr::V4))
+                                    .filter(|ip| match ip {
+                                        IpAddr::V6(_) => !got_aaaa,
+                                        IpAddr::V4(_) => !got_a,
+                                    })
+                            })
+                            .collect::<Vec<_>>()
+                            .into_iter(),
+                    )
+                }
                 DnsResponseInner::Aaaa(ipv6_addrs) => Some(
                     // TODO: Instead of cloned, can these be references?
                     ipv6_addrs
@@ -574,13 +633,18 @@ impl HappyEyeballs {
         // > Some positive (non-empty) address answers have been received AND
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-        if !self
-            .dns_queries
-            .iter()
-            .filter(|q| matches!(q, DnsQuery::Completed { .. }))
-            .filter(|q| q.positive())
-            .any(|q| matches!(q.record_type(), DnsRecordType::A | DnsRecordType::Aaaa))
-        {
+        if !self.dns_queries.iter().any(|q| match q {
+            DnsQuery::Completed { response } => match &response.inner {
+                DnsResponseInner::Aaaa(Ok(addrs)) => !addrs.is_empty(),
+                DnsResponseInner::A(Ok(addrs)) => !addrs.is_empty(),
+                DnsResponseInner::Https(Ok(infos)) => infos
+                    .iter()
+                    .any(|i| !i.ipv4_hints.is_empty() || !i.ipv6_hints.is_empty()),
+
+                _ => false,
+            },
+            _ => false,
+        }) {
             return false;
         }
 
