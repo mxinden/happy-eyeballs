@@ -12,6 +12,8 @@ use happy_eyeballs::{
 const HOSTNAME: &str = "example.com.";
 const PORT: u16 = 443;
 const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+const V6_ADDR_2: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2);
+const V6_ADDR_3: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 3);
 const V4_ADDR: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);
 
 trait HappyEyeballsExt {
@@ -153,7 +155,7 @@ fn initial_state() {
 /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4>
 #[cfg(test)]
 mod section_4_hostname_resolution {
-    use happy_eyeballs::RESOLUTION_DELAY;
+    use happy_eyeballs::{CONNECTION_ATTEMPT_DELAY, RESOLUTION_DELAY};
 
     use super::*;
 
@@ -361,6 +363,41 @@ mod section_4_hostname_resolution {
                     Some(out_send_dns_svc1()),
                 ),
             ],
+            now,
+        );
+    }
+
+    #[test]
+    fn multiple_ips_per_record() {
+        let (mut now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                (Some(in_dns_https_negative()), None),
+                (Some(in_dns_a_negative()), None),
+                (
+                    Some(Input::DnsResponse(DnsResponse {
+                        target_name: "example.com.".into(),
+                        inner: DnsResponseInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2, V6_ADDR_3])),
+                    })),
+                    Some(out_attempt_v6()),
+                ),
+            ],
+            now,
+        );
+
+        now += CONNECTION_ATTEMPT_DELAY;
+
+        he.expect(
+            vec![(
+                None,
+                Some(Output::AttemptConnection {
+                    address: SocketAddr::new(V6_ADDR_2.into(), PORT),
+                }),
+            )],
             now,
         );
     }

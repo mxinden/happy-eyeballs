@@ -512,13 +512,30 @@ impl HappyEyeballs {
             .filter_map(|q| q.get_response())
             .filter_map(|r| match &r.inner {
                 DnsResponseInner::Https(_) => None,
-                DnsResponseInner::Aaaa(ipv6_addrs) => Some(IpAddr::V6(
-                    ipv6_addrs.as_ref().ok()?.iter().next().cloned().unwrap(),
-                )),
-                DnsResponseInner::A(ipv4_addrs) => Some(IpAddr::V4(
-                    ipv4_addrs.as_ref().ok()?.iter().next().cloned().unwrap(),
-                )),
+                DnsResponseInner::Aaaa(ipv6_addrs) => Some(
+                    // TODO: Instead of cloned, can these be references?
+                    ipv6_addrs
+                        .as_ref()
+                        .ok()?
+                        .iter()
+                        .cloned()
+                        .map(IpAddr::V6)
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                ),
+                DnsResponseInner::A(ipv4_addrs) => Some(
+                    // TODO: Instead of cloned, can these be references?
+                    ipv4_addrs
+                        .as_ref()
+                        .ok()?
+                        .iter()
+                        .cloned()
+                        .map(IpAddr::V4)
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                ),
             })
+            .flatten()
             .filter(|ip| {
                 !self
                     .connection_attempts
