@@ -528,7 +528,7 @@ impl HappyEyeballs {
             .collect::<Vec<_>>();
         ips.sort_by_key(|ip| (ip.is_ipv6() != self.network_config.prefer_v6()) as u8);
 
-        let ip = ips.into_iter().next().unwrap();
+        let ip = ips.into_iter().next()?;
 
         self.connection_attempts.push((ip, now));
         // TODO: Should we attempt connecting to HTTPS RR IP hints?

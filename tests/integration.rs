@@ -392,4 +392,25 @@ mod section_6_connection_attempts {
 
         he.expect(vec![(None, Some(out_attempt_v4()))], now);
     }
+
+    #[test]
+    fn never_try_same_attempt_twice() {
+        let (mut now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                (Some(in_dns_https_negative()), None),
+                (Some(in_dns_a_negative()), None),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+            ],
+            now,
+        );
+
+        now += CONNECTION_ATTEMPT_DELAY;
+
+        he.expect(vec![(None, None)], now);
+    }
 }
