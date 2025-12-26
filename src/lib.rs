@@ -215,13 +215,6 @@ impl DnsQuery {
         }
     }
 
-    fn positive(&self) -> bool {
-        match self {
-            DnsQuery::InProgress { .. } => false,
-            DnsQuery::Completed { response } => response.positive(),
-        }
-    }
-
     fn get_response(&self) -> Option<&DnsResponse> {
         match self {
             DnsQuery::InProgress { .. } => None,
@@ -506,6 +499,16 @@ impl HappyEyeballs {
         {
             return None;
         }
+        let ip = self.next_connection_attempt_ip()?;
+
+        self.connection_attempts.push((ip, now));
+
+        Some(Output::AttemptConnection {
+            address: SocketAddr::new(ip, self.target.1),
+        })
+    }
+
+    fn next_connection_attempt_ip(&self) -> Option<IpAddr> {
         let mut ips = self
             .dns_queries
             .iter()
@@ -519,38 +522,8 @@ impl HappyEyeballs {
                     // > are not available yet.
                     //
                     // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
-                    let got_a = self
-                        .dns_queries
-                        .iter()
-                        .filter(|q| *q.target_name() == self.target.0)
-                        .any(|q| {
-                            matches!(
-                                q,
-                                DnsQuery::Completed {
-                                    response:
-                                        DnsResponse {
-                                            inner: DnsResponseInner::A(Ok(addrs)),
-                                            ..
-                                        },
-                                } if !addrs.is_empty()
-                            )
-                        });
-                    let got_aaaa = self
-                        .dns_queries
-                        .iter()
-                        .filter(|q| *q.target_name() == self.target.0)
-                        .any(|q| {
-                            matches!(
-                                q,
-                                DnsQuery::Completed {
-                                    response:
-                                        DnsResponse {
-                                            inner: DnsResponseInner::Aaaa(Ok(addrs)),
-                                            ..
-                                        },
-                                } if !addrs.is_empty()
-                            )
-                        });
+                    let got_a = self.got_dns_a_response();
+                    let got_aaaa = self.got_dns_aaaa_response();
                     Some(
                         infos
                             .as_ref()
@@ -603,16 +576,43 @@ impl HappyEyeballs {
             })
             .collect::<Vec<_>>();
         ips.sort_by_key(|ip| (ip.is_ipv6() != self.network_config.prefer_v6()) as u8);
+        ips.into_iter().next()
+    }
 
-        let ip = ips.into_iter().next()?;
+    fn got_dns_aaaa_response(&self) -> bool {
+        self.dns_queries
+            .iter()
+            .filter(|q| *q.target_name() == self.target.0)
+            .any(|q| {
+                matches!(
+                    q,
+                    DnsQuery::Completed {
+                        response:
+                            DnsResponse {
+                                inner: DnsResponseInner::Aaaa(Ok(addrs)),
+                                ..
+                            },
+                    } if !addrs.is_empty()
+                )
+            })
+    }
 
-        self.connection_attempts.push((ip, now));
-        // TODO: Should we attempt connecting to HTTPS RR IP hints?
-
-        // TODO: What if we already made that connection attempt?
-        Some(Output::AttemptConnection {
-            address: SocketAddr::new(ip, self.target.1),
-        })
+    fn got_dns_a_response(&self) -> bool {
+        self.dns_queries
+            .iter()
+            .filter(|q| *q.target_name() == self.target.0)
+            .any(|q| {
+                matches!(
+                    q,
+                    DnsQuery::Completed {
+                        response:
+                            DnsResponse {
+                                inner: DnsResponseInner::A(Ok(addrs)),
+                                ..
+                            },
+                    } if !addrs.is_empty()
+                )
+            })
     }
 
     /// Whether to move on to the connection attempt phase based on the received
