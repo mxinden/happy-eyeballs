@@ -136,7 +136,7 @@ pub enum Output {
     },
 
     /// Start a timer
-    StartTimer {
+    Timer {
         timer_type: TimerType,
         duration: Duration,
     },
@@ -345,8 +345,8 @@ impl HappyEyeballs {
     /// Call with `None` to advance the state machine and get any pending outputs.
     /// Call with `Some(input)` to provide external input (DNS results, timers, etc.).
     ///
-    /// The caller should keep calling `process(None)` until it returns `Output::None`
-    /// or a timer output, then wait for the corresponding input before continuing.
+    /// The caller must call [`HappyEyeballs::process`] with input [`None`]
+    /// until it returns [`None`] or [`Output::Timer`].
     pub fn process(&mut self, input: Option<Input>, now: Instant) -> Option<Output> {
         // Handle input.
         let output = match input {
@@ -400,6 +400,7 @@ impl HappyEyeballs {
         None
     }
 
+    // TODO: Limit number of target names.
     /// > Note that clients are still required to issue A and AAAA queries
     /// > for those TargetNames if they haven't yet received those records.
     ///
