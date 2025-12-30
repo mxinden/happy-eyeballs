@@ -142,11 +142,7 @@ pub enum Output {
     },
 
     /// Attempt to connect to an address
-    AttemptConnection {
-        address: SocketAddr,
-        // TODO: Protocol
-        // TODO: ECH
-    },
+    AttemptConnection { endpoint: Endpoint },
 
     // TODO: Consider a CancelSendDnsQuery.
     /// Cancel a connection attempt
@@ -313,10 +309,39 @@ impl NetworkConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ConnectionAttempt {
+    pub endpoint: Endpoint,
+    pub started: Instant,
+}
+
+impl ConnectionAttempt {
+    fn within_delay(&self, now: Instant) -> bool {
+        now.duration_since(self.started) < CONNECTION_ATTEMPT_DELAY
+    }
+}
+
+/// All information (IP, protocol, ...) needed to attempt a connection to a specific endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Endpoint {
+    address: SocketAddr,
+    // protocol: Protocol,
+}
+
+impl Endpoint {
+    pub fn new(address: SocketAddr) -> Self {
+        Self { address }
+    }
+
+    pub fn address(&self) -> SocketAddr {
+        self.address
+    }
+}
+
 /// Happy Eyeballs v3 state machine
 pub struct HappyEyeballs {
     dns_queries: Vec<DnsQuery>,
-    connection_attempts: Vec<(IpAddr, Instant)>,
+    connection_attempts: Vec<ConnectionAttempt>,
     /// Network configuration
     network_config: NetworkConfig,
     // TODO: Split in host and port?
@@ -493,23 +518,20 @@ impl HappyEyeballs {
             return None;
         }
 
-        if self
-            .connection_attempts
-            .iter()
-            .any(|(_, t)| now.duration_since(*t) < CONNECTION_ATTEMPT_DELAY)
-        {
+        if self.connection_attempts.iter().any(|a| a.within_delay(now)) {
             return None;
         }
-        let ip = self.next_connection_attempt_ip()?;
+        let endpoint = self.next_endpoint_to_attempt()?;
 
-        self.connection_attempts.push((ip, now));
+        self.connection_attempts.push(ConnectionAttempt {
+            endpoint: endpoint.clone(),
+            started: now,
+        });
 
-        Some(Output::AttemptConnection {
-            address: SocketAddr::new(ip, self.target.1),
-        })
+        Some(Output::AttemptConnection { endpoint })
     }
 
-    fn next_connection_attempt_ip(&self) -> Option<IpAddr> {
+    fn next_endpoint_to_attempt(&self) -> Option<Endpoint> {
         let mut ips = self
             .dns_queries
             .iter()
@@ -569,14 +591,19 @@ impl HappyEyeballs {
                 ),
             })
             .flatten()
-            .filter(|ip| {
+            .map(|ip| Endpoint {
+                address: SocketAddr::new(ip, self.target.1),
+            })
+            .filter(|endpoint| {
                 !self
                     .connection_attempts
                     .iter()
-                    .any(|(attempted_ip, _)| attempted_ip == ip)
+                    .any(|attempt| attempt.endpoint == *endpoint)
             })
             .collect::<Vec<_>>();
-        ips.sort_by_key(|ip| (ip.is_ipv6() != self.network_config.prefer_v6()) as u8);
+        ips.sort_by_key(|endpoint| {
+            (endpoint.address.ip().is_ipv6() != self.network_config.prefer_v6()) as u8
+        });
         ips.into_iter().next()
     }
 

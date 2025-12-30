@@ -4,8 +4,8 @@ use std::{
 };
 
 use happy_eyeballs::{
-    DnsRecordType, DnsResponse, DnsResponseInner, HappyEyeballs, HttpVersions, Input, IpPreference,
-    NetworkConfig, Output,
+    DnsRecordType, DnsResponse, DnsResponseInner, Endpoint, HappyEyeballs, HttpVersions, Input,
+    IpPreference, NetworkConfig, Output,
 };
 
 // TODO: Handle difference between com. and com? Use library for hostnames?!
@@ -136,13 +136,13 @@ fn out_send_dns_a() -> Output {
 
 fn out_attempt_v6() -> Output {
     Output::AttemptConnection {
-        address: SocketAddr::new(V6_ADDR.into(), PORT),
+        endpoint: Endpoint::new(SocketAddr::new(V6_ADDR.into(), PORT)),
     }
 }
 
 fn out_attempt_v4() -> Output {
     Output::AttemptConnection {
-        address: SocketAddr::new(V4_ADDR.into(), PORT),
+        endpoint: Endpoint::new(SocketAddr::new(V4_ADDR.into(), PORT)),
     }
 }
 
@@ -423,7 +423,7 @@ mod section_4_hostname_resolution {
             vec![(
                 None,
                 Some(Output::AttemptConnection {
-                    address: SocketAddr::new(V6_ADDR_2.into(), PORT),
+                    endpoint: Endpoint::new(SocketAddr::new(V6_ADDR_2.into(), PORT)),
                 }),
             )],
             now,
