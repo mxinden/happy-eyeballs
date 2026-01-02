@@ -1,11 +1,12 @@
 use std::{
+    collections::HashSet,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Instant,
 };
 
 use happy_eyeballs::{
-    DnsRecordType, DnsResponse, DnsResponseInner, Endpoint, HappyEyeballs, HttpVersions, Input,
-    IpPreference, NetworkConfig, Output,
+    Protocol, DnsRecordType, DnsResponse, DnsResponseInner, Endpoint, HappyEyeballs, HttpVersions,
+    Input, IpPreference, NetworkConfig, Output,
 };
 
 // TODO: Handle difference between com. and com? Use library for hostnames?!
@@ -35,7 +36,7 @@ fn in_dns_https_positive() -> Input {
         inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: "example.com.".into(),
-            alpn_protocols: vec!["h3".to_string(), "h2".to_string()],
+            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
             ipv6_hints: vec![],
             ipv4_hints: vec![],
             ech_config: None,
@@ -49,7 +50,7 @@ fn in_dns_https_positive_v6_hints() -> Input {
         inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: "example.com.".into(),
-            alpn_protocols: vec!["h3".to_string(), "h2".to_string()],
+            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
             ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)],
             ipv4_hints: vec![],
             ech_config: None,
@@ -63,7 +64,7 @@ fn in_dns_https_positive_svc1() -> Input {
         inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: "svc1.example.com.".into(),
-            alpn_protocols: vec!["h3".to_string(), "h2".to_string()],
+            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
             ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)],
             ipv4_hints: vec![],
             ech_config: None,
@@ -136,13 +137,28 @@ fn out_send_dns_a() -> Output {
 
 fn out_attempt_v6() -> Output {
     Output::AttemptConnection {
-        endpoint: Endpoint::new(SocketAddr::new(V6_ADDR.into(), PORT)),
+        endpoint: Endpoint {
+            address: SocketAddr::new(V6_ADDR.into(), PORT),
+            protocol: Protocol::H2,
+        },
+    }
+}
+
+fn out_attempt_v6_h3() -> Output {
+    Output::AttemptConnection {
+        endpoint: Endpoint {
+            address: SocketAddr::new(V6_ADDR.into(), PORT),
+            protocol: Protocol::H3,
+        },
     }
 }
 
 fn out_attempt_v4() -> Output {
     Output::AttemptConnection {
-        endpoint: Endpoint::new(SocketAddr::new(V4_ADDR.into(), PORT)),
+        endpoint: Endpoint {
+            address: SocketAddr::new(V4_ADDR.into(), PORT),
+            protocol: Protocol::H2,
+        },
     }
 }
 
@@ -366,7 +382,7 @@ mod section_4_hostname_resolution {
                 (Some(in_dns_a_negative()), None),
                 (
                     Some(in_dns_https_positive_v6_hints()),
-                    Some(out_attempt_v6()),
+                    Some(out_attempt_v6_h3()),
                 ),
             ],
             now,
@@ -423,7 +439,10 @@ mod section_4_hostname_resolution {
             vec![(
                 None,
                 Some(Output::AttemptConnection {
-                    endpoint: Endpoint::new(SocketAddr::new(V6_ADDR_2.into(), PORT)),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR_2.into(), PORT),
+                        protocol: Protocol::H2,
+                    },
                 }),
             )],
             now,

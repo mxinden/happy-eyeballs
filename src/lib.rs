@@ -30,6 +30,8 @@
 //! }
 //! ```
 
+use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
@@ -174,10 +176,17 @@ pub enum TimerType {
 pub struct ServiceInfo {
     pub priority: u16,
     pub target_name: TargetName,
-    pub alpn_protocols: Vec<String>,
+    pub alpn_protocols: HashSet<Protocol>,
     pub ech_config: Option<Vec<u8>>,
     pub ipv4_hints: Vec<Ipv4Addr>,
     pub ipv6_hints: Vec<Ipv6Addr>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Protocol {
+    H3,
+    H2,
+    H1,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -324,18 +333,9 @@ impl ConnectionAttempt {
 /// All information (IP, protocol, ...) needed to attempt a connection to a specific endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
-    address: SocketAddr,
-    // protocol: Protocol,
-}
-
-impl Endpoint {
-    pub fn new(address: SocketAddr) -> Self {
-        Self { address }
-    }
-
-    pub fn address(&self) -> SocketAddr {
-        self.address
-    }
+    pub address: SocketAddr,
+    // TODO: Currently just taking H2, when really it should be H1 and H2. Is that a problem?
+    pub protocol: Protocol,
 }
 
 /// Happy Eyeballs v3 state machine
@@ -532,7 +532,7 @@ impl HappyEyeballs {
     }
 
     fn next_endpoint_to_attempt(&self) -> Option<Endpoint> {
-        let mut ips = self
+        let mut endpoints = self
             .dns_queries
             .iter()
             .filter_map(|q| q.get_response())
@@ -547,25 +547,30 @@ impl HappyEyeballs {
                     // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
                     let got_a = self.got_dns_a_response();
                     let got_aaaa = self.got_dns_aaaa_response();
-                    Some(
-                        infos
-                            .as_ref()
-                            .ok()?
-                            .iter()
-                            .flat_map(|info| {
-                                info.ipv6_hints
-                                    .iter()
-                                    .cloned()
-                                    .map(IpAddr::V6)
-                                    .chain(info.ipv4_hints.iter().cloned().map(IpAddr::V4))
-                                    .filter(|ip| match ip {
-                                        IpAddr::V6(_) => !got_aaaa,
-                                        IpAddr::V4(_) => !got_a,
+                    let ips = infos
+                        .as_ref()
+                        .ok()?
+                        .iter()
+                        .flat_map(|info| {
+                            info.ipv6_hints
+                                .iter()
+                                .cloned()
+                                .map(IpAddr::V6)
+                                .chain(info.ipv4_hints.iter().cloned().map(IpAddr::V4))
+                                .filter(|ip| match ip {
+                                    IpAddr::V6(_) => !got_aaaa,
+                                    IpAddr::V4(_) => !got_a,
+                                })
+                                .flat_map(|ip| {
+                                    info.alpn_protocols.iter().map(move |alpn| Endpoint {
+                                        address: SocketAddr::new(ip, self.target.1),
+                                        protocol: *alpn,
                                     })
-                            })
-                            .collect::<Vec<_>>()
-                            .into_iter(),
-                    )
+                                })
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter();
+                    Some(ips)
                 }
                 DnsResponseInner::Aaaa(ipv6_addrs) => Some(
                     // TODO: Instead of cloned, can these be references?
@@ -574,7 +579,10 @@ impl HappyEyeballs {
                         .ok()?
                         .iter()
                         .cloned()
-                        .map(IpAddr::V6)
+                        .map(|ip| Endpoint {
+                            address: SocketAddr::new(IpAddr::V6(ip), self.target.1),
+                            protocol: Protocol::H2,
+                        })
                         .collect::<Vec<_>>()
                         .into_iter(),
                 ),
@@ -585,15 +593,15 @@ impl HappyEyeballs {
                         .ok()?
                         .iter()
                         .cloned()
-                        .map(IpAddr::V4)
+                        .map(|ip| Endpoint {
+                            address: SocketAddr::new(IpAddr::V4(ip), self.target.1),
+                            protocol: Protocol::H2,
+                        })
                         .collect::<Vec<_>>()
                         .into_iter(),
                 ),
             })
             .flatten()
-            .map(|ip| Endpoint {
-                address: SocketAddr::new(ip, self.target.1),
-            })
             .filter(|endpoint| {
                 !self
                     .connection_attempts
@@ -601,10 +609,28 @@ impl HappyEyeballs {
                     .any(|attempt| attempt.endpoint == *endpoint)
             })
             .collect::<Vec<_>>();
-        ips.sort_by_key(|endpoint| {
-            (endpoint.address.ip().is_ipv6() != self.network_config.prefer_v6()) as u8
+        endpoints.sort_by(|a, b| {
+            if a.protocol != b.protocol {
+                return a.protocol.cmp(&b.protocol);
+            }
+
+            if self.network_config.prefer_v6() {
+                if a.address.ip().is_ipv6() && b.address.ip().is_ipv4() {
+                    return Ordering::Less;
+                } else if a.address.ip().is_ipv4() && b.address.ip().is_ipv6() {
+                    return Ordering::Greater;
+                }
+            } else {
+                if a.address.ip().is_ipv4() && b.address.ip().is_ipv6() {
+                    return Ordering::Less;
+                } else if a.address.ip().is_ipv6() && b.address.ip().is_ipv4() {
+                    return Ordering::Greater;
+                }
+            }
+
+            Ordering::Equal
         });
-        ips.into_iter().next()
+        endpoints.into_iter().next()
     }
 
     fn got_dns_aaaa_response(&self) -> bool {
