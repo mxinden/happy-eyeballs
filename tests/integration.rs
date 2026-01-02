@@ -529,7 +529,6 @@ mod section_6_connection_attempts {
     }
 }
 
-#[ignore]
 #[test]
 fn ipv6_blackhole() {
     let (mut now, mut he) = setup();
@@ -541,10 +540,18 @@ fn ipv6_blackhole() {
             (None, Some(out_send_dns_a())),
             (Some(in_dns_https_positive()), None),
             (Some(in_dns_a_positive()), None),
-            (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+            (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h3())),
         ],
         now,
     );
 
-    todo!()
+    for _ in 0..42 {
+        now += CONNECTION_ATTEMPT_DELAY;
+        let connection_attempt = he.process(None, now).unwrap().attempt().unwrap();
+        if connection_attempt.address.is_ipv4() {
+            return;
+        }
+    }
+    
+    panic!("Did not fall back to IPv4.");
 }

@@ -202,6 +202,15 @@ pub enum Output {
     // TODO: Should there be an event for giving up?
 }
 
+impl Output {
+    pub fn attempt(self) -> Option<Endpoint> {
+        match self {
+            Output::AttemptConnection { endpoint } => Some(endpoint),
+            _ => None,
+        }
+    }
+}
+
 /// DNS record types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DnsRecordType {
