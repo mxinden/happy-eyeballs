@@ -117,6 +117,43 @@ impl DnsResponseInner {
             DnsResponseInner::A(r) => r.is_ok(),
         }
     }
+
+    fn flatten_into_endpoints(&self, port: u16, got_a: bool, got_aaaa: bool) -> Vec<Endpoint> {
+        match self {
+            DnsResponseInner::Https(infos) => infos
+                .as_ref()
+                .ok()
+                .into_iter()
+                .flat_map(|infos| {
+                    infos
+                        .iter()
+                        .flat_map(|info| info.flatten_into_endpoints(port, got_a, got_aaaa))
+                })
+                .collect(),
+            DnsResponseInner::Aaaa(ipv6_addrs) => ipv6_addrs
+                .as_ref()
+                .ok()
+                .into_iter()
+                .flat_map(|addrs| {
+                    addrs.iter().cloned().map(|ip| Endpoint {
+                        address: SocketAddr::new(IpAddr::V6(ip), port),
+                        protocol: Protocol::H2,
+                    })
+                })
+                .collect(),
+            DnsResponseInner::A(ipv4_addrs) => ipv4_addrs
+                .as_ref()
+                .ok()
+                .into_iter()
+                .flat_map(|addrs| {
+                    addrs.iter().cloned().map(|ip| Endpoint {
+                        address: SocketAddr::new(IpAddr::V4(ip), port),
+                        protocol: Protocol::H2,
+                    })
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -180,6 +217,34 @@ pub struct ServiceInfo {
     pub ech_config: Option<Vec<u8>>,
     pub ipv4_hints: Vec<Ipv4Addr>,
     pub ipv6_hints: Vec<Ipv6Addr>,
+}
+
+impl ServiceInfo {
+    fn flatten_into_endpoints(&self, port: u16, got_a: bool, got_aaaa: bool) -> Vec<Endpoint> {
+        self.ipv6_hints
+            .iter()
+            .cloned()
+            .map(IpAddr::V6)
+            .chain(self.ipv4_hints.iter().cloned().map(IpAddr::V4))
+            // > ServiceMode records can contain address hints via ipv6hint and
+            // > ipv4hint parameters. When these are received, they SHOULD be
+            // > considered as positive non-empty answers for the purpose of the
+            // > algorithm when A and AAAA records corresponding to the TargetName
+            // > are not available yet.
+            //
+            // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
+            .filter(|ip| match ip {
+                IpAddr::V6(_) => !got_aaaa,
+                IpAddr::V4(_) => !got_a,
+            })
+            .flat_map(|ip| {
+                self.alpn_protocols.iter().map(move |alpn| Endpoint {
+                    address: SocketAddr::new(ip, port),
+                    protocol: *alpn,
+                })
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -336,6 +401,30 @@ pub struct Endpoint {
     pub address: SocketAddr,
     // TODO: Currently just taking H2, when really it should be H1 and H2. Is that a problem?
     pub protocol: Protocol,
+}
+
+impl Endpoint {
+    fn sort_with_config(&self, other: &Endpoint, network_config: &NetworkConfig) -> Ordering {
+        if self.protocol != other.protocol {
+            return self.protocol.cmp(&other.protocol);
+        }
+
+        if network_config.prefer_v6() {
+            if self.address.ip().is_ipv6() && other.address.ip().is_ipv4() {
+                return Ordering::Less;
+            } else if self.address.ip().is_ipv4() && other.address.ip().is_ipv6() {
+                return Ordering::Greater;
+            }
+        } else {
+            if self.address.ip().is_ipv4() && other.address.ip().is_ipv6() {
+                return Ordering::Less;
+            } else if self.address.ip().is_ipv6() && other.address.ip().is_ipv4() {
+                return Ordering::Greater;
+            }
+        }
+
+        Ordering::Equal
+    }
 }
 
 /// Happy Eyeballs v3 state machine
@@ -532,74 +621,15 @@ impl HappyEyeballs {
     }
 
     fn next_endpoint_to_attempt(&self) -> Option<Endpoint> {
+        let got_a = self.got_dns_a_response();
+        let got_aaaa = self.got_dns_aaaa_response();
         let mut endpoints = self
             .dns_queries
             .iter()
             .filter_map(|q| q.get_response())
-            .filter_map(|r| match &r.inner {
-                DnsResponseInner::Https(infos) => {
-                    // > ServiceMode records can contain address hints via ipv6hint and
-                    // > ipv4hint parameters. When these are received, they SHOULD be
-                    // > considered as positive non-empty answers for the purpose of the
-                    // > algorithm when A and AAAA records corresponding to the TargetName
-                    // > are not available yet.
-                    //
-                    // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
-                    let got_a = self.got_dns_a_response();
-                    let got_aaaa = self.got_dns_aaaa_response();
-                    let ips = infos
-                        .as_ref()
-                        .ok()?
-                        .iter()
-                        .flat_map(|info| {
-                            info.ipv6_hints
-                                .iter()
-                                .cloned()
-                                .map(IpAddr::V6)
-                                .chain(info.ipv4_hints.iter().cloned().map(IpAddr::V4))
-                                .filter(|ip| match ip {
-                                    IpAddr::V6(_) => !got_aaaa,
-                                    IpAddr::V4(_) => !got_a,
-                                })
-                                .flat_map(|ip| {
-                                    info.alpn_protocols.iter().map(move |alpn| Endpoint {
-                                        address: SocketAddr::new(ip, self.target.1),
-                                        protocol: *alpn,
-                                    })
-                                })
-                        })
-                        .collect::<Vec<_>>()
-                        .into_iter();
-                    Some(ips)
-                }
-                DnsResponseInner::Aaaa(ipv6_addrs) => Some(
-                    // TODO: Instead of cloned, can these be references?
-                    ipv6_addrs
-                        .as_ref()
-                        .ok()?
-                        .iter()
-                        .cloned()
-                        .map(|ip| Endpoint {
-                            address: SocketAddr::new(IpAddr::V6(ip), self.target.1),
-                            protocol: Protocol::H2,
-                        })
-                        .collect::<Vec<_>>()
-                        .into_iter(),
-                ),
-                DnsResponseInner::A(ipv4_addrs) => Some(
-                    // TODO: Instead of cloned, can these be references?
-                    ipv4_addrs
-                        .as_ref()
-                        .ok()?
-                        .iter()
-                        .cloned()
-                        .map(|ip| Endpoint {
-                            address: SocketAddr::new(IpAddr::V4(ip), self.target.1),
-                            protocol: Protocol::H2,
-                        })
-                        .collect::<Vec<_>>()
-                        .into_iter(),
-                ),
+            .map(|r| {
+                r.inner
+                    .flatten_into_endpoints(self.target.1, got_a, got_aaaa)
             })
             .flatten()
             .filter(|endpoint| {
@@ -609,27 +639,7 @@ impl HappyEyeballs {
                     .any(|attempt| attempt.endpoint == *endpoint)
             })
             .collect::<Vec<_>>();
-        endpoints.sort_by(|a, b| {
-            if a.protocol != b.protocol {
-                return a.protocol.cmp(&b.protocol);
-            }
-
-            if self.network_config.prefer_v6() {
-                if a.address.ip().is_ipv6() && b.address.ip().is_ipv4() {
-                    return Ordering::Less;
-                } else if a.address.ip().is_ipv4() && b.address.ip().is_ipv6() {
-                    return Ordering::Greater;
-                }
-            } else {
-                if a.address.ip().is_ipv4() && b.address.ip().is_ipv6() {
-                    return Ordering::Less;
-                } else if a.address.ip().is_ipv6() && b.address.ip().is_ipv4() {
-                    return Ordering::Greater;
-                }
-            }
-
-            Ordering::Equal
-        });
+        endpoints.sort_by(|a, b| a.sort_with_config(b, &self.network_config));
         endpoints.into_iter().next()
     }
 
