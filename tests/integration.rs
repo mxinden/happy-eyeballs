@@ -5,8 +5,9 @@ use std::{
 };
 
 use happy_eyeballs::{
-    Protocol, DnsRecordType, DnsResponse, DnsResponseInner, Endpoint, HappyEyeballs, HttpVersions,
-    Input, IpPreference, NetworkConfig, Output,
+    CONNECTION_ATTEMPT_DELAY, DnsRecordType, DnsResponse, DnsResponseInner, Endpoint,
+    HappyEyeballs, HttpVersions, Input, IpPreference, NetworkConfig, Output, Protocol,
+    RESOLUTION_DELAY,
 };
 
 // TODO: Handle difference between com. and com? Use library for hostnames?!
@@ -37,6 +38,20 @@ fn in_dns_https_positive() -> Input {
             priority: 1,
             target_name: "example.com.".into(),
             alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+            ipv6_hints: vec![],
+            ipv4_hints: vec![],
+            ech_config: None,
+        }])),
+    })
+}
+
+fn in_dns_https_positive_no_alpn() -> Input {
+    Input::DnsResponse(DnsResponse {
+        target_name: "example.com.".into(),
+        inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+            priority: 1,
+            target_name: "example.com.".into(),
+            alpn_protocols: HashSet::new(),
             ipv6_hints: vec![],
             ipv4_hints: vec![],
             ech_config: None,
@@ -185,7 +200,6 @@ fn initial_state() {
 /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4>
 #[cfg(test)]
 mod section_4_hostname_resolution {
-    use happy_eyeballs::{CONNECTION_ATTEMPT_DELAY, RESOLUTION_DELAY};
 
     use super::*;
 
@@ -227,7 +241,7 @@ mod section_4_hostname_resolution {
                 (None, Some(out_send_dns_aaaa())),
                 (None, Some(out_send_dns_a())),
                 (Some(in_dns_https_positive()), None),
-                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h3())),
             ],
             now,
         );
@@ -318,7 +332,7 @@ mod section_4_hostname_resolution {
         ];
 
         for test_case in test_cases {
-            for https in [in_dns_https_positive(), in_dns_https_negative()] {
+            for https in [in_dns_https_positive_no_alpn(), in_dns_https_negative()] {
                 let (now, mut he) = setup_with_config(test_case.address_family.clone());
 
                 he.expect(
@@ -412,6 +426,22 @@ mod section_4_hostname_resolution {
     }
 
     #[test]
+    fn https_h3_upgrade_without_hints() {
+        let (now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                (Some(in_dns_aaaa_positive()), None),
+                (Some(in_dns_https_positive()), Some(out_attempt_v6_h3())),
+            ],
+            now,
+        );
+    }
+
+    #[test]
     fn multiple_ips_per_record() {
         let (mut now, mut he) = setup();
 
@@ -465,7 +495,7 @@ mod section_6_connection_attempts {
                 (None, Some(out_send_dns_https())),
                 (None, Some(out_send_dns_aaaa())),
                 (None, Some(out_send_dns_a())),
-                (Some(in_dns_https_positive()), None),
+                (Some(in_dns_https_positive_no_alpn()), None),
                 (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
                 (Some(in_dns_a_positive()), None),
             ],
@@ -497,4 +527,24 @@ mod section_6_connection_attempts {
 
         he.expect(vec![(None, None)], now);
     }
+}
+
+#[ignore]
+#[test]
+fn ipv6_blackhole() {
+    let (mut now, mut he) = setup();
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https())),
+            (None, Some(out_send_dns_aaaa())),
+            (None, Some(out_send_dns_a())),
+            (Some(in_dns_https_positive()), None),
+            (Some(in_dns_a_positive()), None),
+            (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+        ],
+        now,
+    );
+
+    todo!()
 }

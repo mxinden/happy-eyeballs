@@ -118,7 +118,13 @@ impl DnsResponseInner {
         }
     }
 
-    fn flatten_into_endpoints(&self, port: u16, got_a: bool, got_aaaa: bool) -> Vec<Endpoint> {
+    fn flatten_into_endpoints(
+        &self,
+        port: u16,
+        got_a: bool,
+        got_aaaa: bool,
+        protocols: HashSet<Protocol>,
+    ) -> Vec<Endpoint> {
         match self {
             DnsResponseInner::Https(infos) => infos
                 .as_ref()
@@ -129,28 +135,35 @@ impl DnsResponseInner {
                         .iter()
                         .flat_map(|info| info.flatten_into_endpoints(port, got_a, got_aaaa))
                 })
+                // TODO: way around allocation?
                 .collect(),
             DnsResponseInner::Aaaa(ipv6_addrs) => ipv6_addrs
                 .as_ref()
                 .ok()
                 .into_iter()
                 .flat_map(|addrs| {
-                    addrs.iter().cloned().map(|ip| Endpoint {
-                        address: SocketAddr::new(IpAddr::V6(ip), port),
-                        protocol: Protocol::H2,
+                    addrs.iter().cloned().flat_map(|ip| {
+                        protocols.iter().map(move |p| Endpoint {
+                            address: SocketAddr::new(IpAddr::V6(ip), port),
+                            protocol: *p,
+                        })
                     })
                 })
+                // TODO: way around allocation?
                 .collect(),
             DnsResponseInner::A(ipv4_addrs) => ipv4_addrs
                 .as_ref()
                 .ok()
                 .into_iter()
                 .flat_map(|addrs| {
-                    addrs.iter().cloned().map(|ip| Endpoint {
-                        address: SocketAddr::new(IpAddr::V4(ip), port),
-                        protocol: Protocol::H2,
+                    addrs.iter().cloned().flat_map(|ip| {
+                        protocols.iter().map(move |p| Endpoint {
+                            address: SocketAddr::new(IpAddr::V4(ip), port),
+                            protocol: *p,
+                        })
                     })
                 })
+                // TODO: way around allocation?
                 .collect(),
         }
     }
@@ -240,6 +253,7 @@ impl ServiceInfo {
             .flat_map(|ip| {
                 self.alpn_protocols.iter().map(move |alpn| Endpoint {
                     address: SocketAddr::new(ip, port),
+                    // TODO: Only take the overlap with HappyEyeballs::protocols().
                     protocol: *alpn,
                 })
             })
@@ -629,7 +643,7 @@ impl HappyEyeballs {
             .filter_map(|q| q.get_response())
             .map(|r| {
                 r.inner
-                    .flatten_into_endpoints(self.target.1, got_a, got_aaaa)
+                    .flatten_into_endpoints(self.target.1, got_a, got_aaaa, self.protocols())
             })
             .flatten()
             .filter(|endpoint| {
@@ -677,6 +691,40 @@ impl HappyEyeballs {
                     } if !addrs.is_empty()
                 )
             })
+    }
+
+    fn protocols(&self) -> HashSet<Protocol> {
+        // TODO: assuming h2. correct?
+        let mut protocols = HashSet::from([Protocol::H2]);
+        for alpn in self.dns_queries.iter().filter_map(|q| match q {
+            DnsQuery::Completed {
+                response:
+                    DnsResponse {
+                        inner: DnsResponseInner::Https(Ok(infos)),
+                        ..
+                    },
+            } => Some(
+                infos
+                    .iter()
+                    .flat_map(|i| i.alpn_protocols.iter().cloned())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        }) {
+            for protocol in alpn {
+                protocols.insert(protocol);
+            }
+        }
+        if !self.network_config.http_versions.h3 {
+            protocols.remove(&Protocol::H3);
+        }
+        if !self.network_config.http_versions.h2 {
+            protocols.remove(&Protocol::H2);
+        }
+        if !self.network_config.http_versions.h1 {
+            protocols.remove(&Protocol::H1);
+        }
+        protocols
     }
 
     /// Whether to move on to the connection attempt phase based on the received
