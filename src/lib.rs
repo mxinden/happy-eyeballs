@@ -32,8 +32,11 @@
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
+
+use tracing::{Level, instrument, trace, trace_span};
 
 /// > The RECOMMENDED value for the Resolution Delay is 50 milliseconds.
 ///
@@ -169,12 +172,18 @@ impl DnsResponseInner {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TargetName(String);
 
 impl From<&str> for TargetName {
     fn from(s: &str) -> Self {
         TargetName(s.to_string())
+    }
+}
+
+impl Debug for TargetName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -231,7 +240,7 @@ pub enum TimerType {
 }
 
 /// Service information from HTTPS records
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ServiceInfo {
     pub priority: u16,
     pub target_name: TargetName,
@@ -239,6 +248,19 @@ pub struct ServiceInfo {
     pub ech_config: Option<Vec<u8>>,
     pub ipv4_hints: Vec<Ipv4Addr>,
     pub ipv6_hints: Vec<Ipv6Addr>,
+}
+
+impl Debug for ServiceInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServiceInfo")
+            .field("priority", &self.priority)
+            .field("target", &self.target_name)
+            .field("alpn", &self.alpn_protocols)
+            .field("ech", &self.ech_config)
+            .field("ipv4", &self.ipv4_hints)
+            .field("ipv6", &self.ipv6_hints)
+            .finish()
+    }
 }
 
 impl ServiceInfo {
@@ -451,6 +473,7 @@ impl Endpoint {
 }
 
 /// Happy Eyeballs v3 state machine
+#[derive(Debug)]
 pub struct HappyEyeballs {
     dns_queries: Vec<DnsQuery>,
     connection_attempts: Vec<ConnectionAttempt>,
@@ -484,7 +507,10 @@ impl HappyEyeballs {
     ///
     /// The caller must call [`HappyEyeballs::process`] with input [`None`]
     /// until it returns [`None`] or [`Output::Timer`].
+    #[instrument(skip_all, level = Level::TRACE, fields(target = %self.target.0.0), ret)]
     pub fn process(&mut self, input: Option<Input>, now: Instant) -> Option<Output> {
+        trace!(input = ?input);
+
         // Handle input.
         let output = match input {
             Some(Input::DnsResponse(response)) => self.on_dns_response(response),

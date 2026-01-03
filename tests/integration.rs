@@ -9,6 +9,8 @@ use happy_eyeballs::{
     HappyEyeballs, HttpVersions, Input, IpPreference, NetworkConfig, Output, Protocol,
     RESOLUTION_DELAY,
 };
+use tracing::trace;
+use tracing_subscriber::util::SubscriberInitExt;
 
 // TODO: Handle difference between com. and com? Use library for hostnames?!
 const HOSTNAME: &str = "example.com.";
@@ -182,6 +184,15 @@ fn setup() -> (Instant, HappyEyeballs) {
 }
 
 fn setup_with_config(config: NetworkConfig) -> (Instant, HappyEyeballs) {
+    let _ = tracing_subscriber::fmt()
+        // Use a more compact, abbreviated log format
+        .compact()
+        // Enable TRACE logs in tests
+        .with_max_level(tracing::Level::TRACE)
+        // Build the subscriber
+        .finish()
+        .try_init();
+
     let now = Instant::now();
     let he = HappyEyeballs::with_network_config(HOSTNAME.to_string(), PORT, config);
     (now, he)
@@ -552,6 +563,6 @@ fn ipv6_blackhole() {
             return;
         }
     }
-    
+
     panic!("Did not fall back to IPv4.");
 }
