@@ -10,7 +10,7 @@ use happy_eyeballs::{
     RESOLUTION_DELAY,
 };
 use tracing::trace;
-use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
 
 // TODO: Handle difference between com. and com? Use library for hostnames?!
 const HOSTNAME: &str = "example.com.";
@@ -187,8 +187,7 @@ fn setup_with_config(config: NetworkConfig) -> (Instant, HappyEyeballs) {
     let _ = tracing_subscriber::fmt()
         // Use a more compact, abbreviated log format
         .compact()
-        // Enable TRACE logs in tests
-        .with_max_level(tracing::Level::TRACE)
+        .with_env_filter(EnvFilter::from_default_env())
         // Build the subscriber
         .finish()
         .try_init();

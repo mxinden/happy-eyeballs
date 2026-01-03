@@ -252,14 +252,28 @@ pub struct ServiceInfo {
 
 impl Debug for ServiceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServiceInfo")
-            .field("priority", &self.priority)
-            .field("target", &self.target_name)
-            .field("alpn", &self.alpn_protocols)
-            .field("ech", &self.ech_config)
-            .field("ipv4", &self.ipv4_hints)
-            .field("ipv6", &self.ipv6_hints)
-            .finish()
+        let mut debug_struct = f.debug_struct("ServiceInfo");
+
+        debug_struct.field("priority", &self.priority);
+        debug_struct.field("target", &self.target_name);
+
+        if !self.alpn_protocols.is_empty() {
+            debug_struct.field("alpn", &self.alpn_protocols);
+        }
+
+        if self.ech_config.is_some() {
+            debug_struct.field("ech", &self.ech_config);
+        }
+
+        if !self.ipv4_hints.is_empty() {
+            debug_struct.field("ipv4", &self.ipv4_hints);
+        }
+
+        if !self.ipv6_hints.is_empty() {
+            debug_struct.field("ipv6", &self.ipv6_hints);
+        }
+
+        debug_struct.finish()
     }
 }
 
