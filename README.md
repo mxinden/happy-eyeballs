@@ -14,19 +14,52 @@ network conditions including HTTPS service discovery and QUIC.
 ## Usage
 
 ```rust
-use happy_eyeballs::*;
-use std::time::Instant;
 
-let mut he = HappyEyeballs::new("example.com".to_string(), 443);
-let now = Instant::now();
+let mut he = HappyEyeballs::new("example.com".into(), 443);
 
-// Process until we get outputs or timers
+let mut now = Instant::now();
 loop {
     match he.process(None, now) {
-        None => break,
-        Some(output) => {
-            // Handle the output (DNS query, connection attempt, etc.)
-            println!("Output: {:?}", output);
+        None => break, // nothing more to do right now
+        Some(Output::SendDnsQuery { hostname, record_type }) => {
+            let response = match record_type {
+                DnsRecordType::Https => {
+                    let mut alpn = HashSet::new();
+                    alpn.insert(Protocol::H3);
+                    alpn.insert(Protocol::H2);
+                    DnsResponse {
+                        target_name: hostname.clone(),
+                        inner: DnsResponseInner::Https(Ok(vec![ServiceInfo {
+                            priority: 1,
+                            target_name: TargetName::from("example.com"),
+                            alpn_protocols: alpn,
+                            ech_config: None,
+                            ipv4_hints: vec![Ipv4Addr::new(192, 0, 2, 1)],
+                            ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)],
+                        }])),
+                    }
+                }
+                DnsRecordType::Aaaa => DnsResponse {
+                    target_name: hostname.clone(),
+                    inner: DnsResponseInner::Aaaa(Ok(vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)])),
+                },
+                DnsRecordType::A => DnsResponse {
+                    target_name: hostname.clone(),
+                    inner: DnsResponseInner::A(Ok(vec![Ipv4Addr::new(192, 0, 2, 1)])),
+                },
+            };
+            let _ = he.process(Some(Input::DnsResponse(response)), now);
+        }
+        Some(Output::AttemptConnection { endpoint }) => {
+            let _ = he.process(
+                Some(Input::ConnectionResult { address: endpoint.address, result: Ok(()) }),
+                now,
+            );
+            break;
+        }
+        Some(Output::CancelConnection(_addr)) => {}
+        Some(Output::Timer { duration }) => {
+            now += duration;
         }
     }
 }

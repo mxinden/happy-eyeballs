@@ -180,13 +180,13 @@ fn out_attempt_v4() -> Output {
 
 fn out_resolution_delay() -> Output {
     Output::Timer {
-        duration: RESOLUTION_DELAY
+        duration: RESOLUTION_DELAY,
     }
 }
 
 fn out_connection_attempt_delay() -> Output {
     Output::Timer {
-        duration: CONNECTION_ATTEMPT_DELAY
+        duration: CONNECTION_ATTEMPT_DELAY,
     }
 }
 
@@ -361,7 +361,10 @@ mod section_4_hostname_resolution {
                         (None, Some(out_send_dns_https())),
                         (None, Some(out_send_dns_aaaa())),
                         (None, Some(out_send_dns_a())),
-                        (Some(test_case.positive.clone()), Some(out_resolution_delay())),
+                        (
+                            Some(test_case.positive.clone()),
+                            Some(out_resolution_delay()),
+                        ),
                         (test_case.preferred.clone(), Some(out_resolution_delay())),
                         (Some(https), test_case.expected.clone()),
                     ],
@@ -516,9 +519,15 @@ mod section_6_connection_attempts {
                 (None, Some(out_send_dns_https())),
                 (None, Some(out_send_dns_aaaa())),
                 (None, Some(out_send_dns_a())),
-                (Some(in_dns_https_positive_no_alpn()), Some(out_resolution_delay())),
+                (
+                    Some(in_dns_https_positive_no_alpn()),
+                    Some(out_resolution_delay()),
+                ),
                 (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
-                (Some(in_dns_a_positive()), Some(out_connection_attempt_delay())),
+                (
+                    Some(in_dns_a_positive()),
+                    Some(out_connection_attempt_delay()),
+                ),
             ],
             now,
         );
