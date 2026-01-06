@@ -181,6 +181,12 @@ impl From<&str> for TargetName {
     }
 }
 
+impl From<TargetName> for String {
+    fn from(t: TargetName) -> Self {
+        t.0
+    }
+}
+
 impl Debug for TargetName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -556,6 +562,7 @@ impl HappyEyeballs {
     }
 
     fn send_dns_request(&mut self, now: Instant) -> Option<Output> {
+        // TODO: What if v4 or v6 is disabled? Don't send the query.
         for record_type in [DnsRecordType::Https, DnsRecordType::Aaaa, DnsRecordType::A] {
             if !self
                 .dns_queries
