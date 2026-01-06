@@ -9,7 +9,6 @@ use happy_eyeballs::{
     HappyEyeballs, HttpVersions, Input, IpPreference, NetworkConfig, Output, Protocol,
     RESOLUTION_DELAY,
 };
-use tracing::trace;
 use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
 
 // TODO: Handle difference between com. and com? Use library for hostnames?!
@@ -179,6 +178,18 @@ fn out_attempt_v4() -> Output {
     }
 }
 
+fn out_resolution_delay() -> Output {
+    Output::Timer {
+        duration: RESOLUTION_DELAY
+    }
+}
+
+fn out_connection_attempt_delay() -> Output {
+    Output::Timer {
+        duration: CONNECTION_ATTEMPT_DELAY
+    }
+}
+
 fn setup() -> (Instant, HappyEyeballs) {
     setup_with_config(NetworkConfig::default())
 }
@@ -250,7 +261,7 @@ mod section_4_hostname_resolution {
                 (None, Some(out_send_dns_https())),
                 (None, Some(out_send_dns_aaaa())),
                 (None, Some(out_send_dns_a())),
-                (Some(in_dns_https_positive()), None),
+                (Some(in_dns_https_positive()), Some(out_resolution_delay())),
                 (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h3())),
             ],
             now,
@@ -350,8 +361,8 @@ mod section_4_hostname_resolution {
                         (None, Some(out_send_dns_https())),
                         (None, Some(out_send_dns_aaaa())),
                         (None, Some(out_send_dns_a())),
-                        (Some(test_case.positive.clone()), None),
-                        (test_case.preferred.clone(), None),
+                        (Some(test_case.positive.clone()), Some(out_resolution_delay())),
+                        (test_case.preferred.clone(), Some(out_resolution_delay())),
                         (Some(https), test_case.expected.clone()),
                     ],
                     now,
@@ -376,7 +387,7 @@ mod section_4_hostname_resolution {
                 (None, Some(out_send_dns_https())),
                 (None, Some(out_send_dns_aaaa())),
                 (None, Some(out_send_dns_a())),
-                (Some(in_dns_a_positive()), None),
+                (Some(in_dns_a_positive()), Some(out_resolution_delay())),
             ],
             now,
         );
@@ -402,8 +413,8 @@ mod section_4_hostname_resolution {
                 (None, Some(out_send_dns_https())),
                 (None, Some(out_send_dns_aaaa())),
                 (None, Some(out_send_dns_a())),
-                (Some(in_dns_aaaa_negative()), None),
-                (Some(in_dns_a_negative()), None),
+                (Some(in_dns_aaaa_negative()), Some(out_resolution_delay())),
+                (Some(in_dns_a_negative()), Some(out_resolution_delay())),
                 (
                     Some(in_dns_https_positive_v6_hints()),
                     Some(out_attempt_v6_h3()),
@@ -444,7 +455,7 @@ mod section_4_hostname_resolution {
                 (None, Some(out_send_dns_https())),
                 (None, Some(out_send_dns_aaaa())),
                 (None, Some(out_send_dns_a())),
-                (Some(in_dns_aaaa_positive()), None),
+                (Some(in_dns_aaaa_positive()), Some(out_resolution_delay())),
                 (Some(in_dns_https_positive()), Some(out_attempt_v6_h3())),
             ],
             now,
@@ -460,8 +471,8 @@ mod section_4_hostname_resolution {
                 (None, Some(out_send_dns_https())),
                 (None, Some(out_send_dns_aaaa())),
                 (None, Some(out_send_dns_a())),
-                (Some(in_dns_https_negative()), None),
-                (Some(in_dns_a_negative()), None),
+                (Some(in_dns_https_negative()), Some(out_resolution_delay())),
+                (Some(in_dns_a_negative()), Some(out_resolution_delay())),
                 (
                     Some(Input::DnsResponse(DnsResponse {
                         target_name: "example.com.".into(),
@@ -505,9 +516,9 @@ mod section_6_connection_attempts {
                 (None, Some(out_send_dns_https())),
                 (None, Some(out_send_dns_aaaa())),
                 (None, Some(out_send_dns_a())),
-                (Some(in_dns_https_positive_no_alpn()), None),
+                (Some(in_dns_https_positive_no_alpn()), Some(out_resolution_delay())),
                 (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
-                (Some(in_dns_a_positive()), None),
+                (Some(in_dns_a_positive()), Some(out_connection_attempt_delay())),
             ],
             now,
         );
@@ -526,8 +537,8 @@ mod section_6_connection_attempts {
                 (None, Some(out_send_dns_https())),
                 (None, Some(out_send_dns_aaaa())),
                 (None, Some(out_send_dns_a())),
-                (Some(in_dns_https_negative()), None),
-                (Some(in_dns_a_negative()), None),
+                (Some(in_dns_https_negative()), Some(out_resolution_delay())),
+                (Some(in_dns_a_negative()), Some(out_resolution_delay())),
                 (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
             ],
             now,
@@ -548,8 +559,8 @@ fn ipv6_blackhole() {
             (None, Some(out_send_dns_https())),
             (None, Some(out_send_dns_aaaa())),
             (None, Some(out_send_dns_a())),
-            (Some(in_dns_https_positive()), None),
-            (Some(in_dns_a_positive()), None),
+            (Some(in_dns_https_positive()), Some(out_resolution_delay())),
+            (Some(in_dns_a_positive()), Some(out_resolution_delay())),
             (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h3())),
         ],
         now,

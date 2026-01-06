@@ -36,7 +36,7 @@ use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use tracing::{Level, instrument, trace, trace_span};
+use tracing::{Level, instrument, trace};
 
 /// > The RECOMMENDED value for the Resolution Delay is 50 milliseconds.
 ///
@@ -203,10 +203,7 @@ pub enum Output {
     },
 
     /// Start a timer
-    Timer {
-        timer_type: TimerType,
-        duration: Duration,
-    },
+    Timer { duration: Duration },
 
     /// Attempt to connect to an address
     AttemptConnection { endpoint: Endpoint },
@@ -474,21 +471,16 @@ impl Endpoint {
             return self.protocol.cmp(&other.protocol);
         }
 
+        let order = self
+            .address
+            .ip()
+            .is_ipv6()
+            .cmp(&other.address.ip().is_ipv6());
         if network_config.prefer_v6() {
-            if self.address.ip().is_ipv6() && other.address.ip().is_ipv4() {
-                return Ordering::Less;
-            } else if self.address.ip().is_ipv4() && other.address.ip().is_ipv6() {
-                return Ordering::Greater;
-            }
+            order.reverse()
         } else {
-            if self.address.ip().is_ipv4() && other.address.ip().is_ipv6() {
-                return Ordering::Less;
-            } else if self.address.ip().is_ipv6() && other.address.ip().is_ipv4() {
-                return Ordering::Greater;
-            }
+            order
         }
-
-        Ordering::Equal
     }
 }
 
@@ -520,6 +512,7 @@ impl HappyEyeballs {
         }
     }
 
+    // TODO: Does this ever return None given the timeouts?
     /// Process an input event and return the corresponding output
     ///
     /// Call with `None` to advance the state machine and get any pending outputs.
@@ -558,7 +551,57 @@ impl HappyEyeballs {
             return output;
         }
 
+        let output = self.timer(now);
+        if output.is_some() {
+            return output;
+        }
+
         None
+    }
+
+    fn timer(&self, now: Instant) -> Option<Output> {
+        let resolution_delay = self
+            .dns_queries
+            .iter()
+            .filter_map(|q| match q {
+                DnsQuery::InProgress {
+                    started,
+                    target_name: _,
+                    record_type: _,
+                } => Some(started),
+                _ => None,
+            })
+            .max()
+            .and_then(|started| {
+                let elapsed = now.duration_since(*started);
+                if elapsed < RESOLUTION_DELAY {
+                    Some(RESOLUTION_DELAY - elapsed)
+                } else {
+                    None
+                }
+            });
+
+        let connection_attempt_delay = self
+            .connection_attempts
+            .iter()
+            .map(|a| &a.started)
+            .max()
+            .and_then(|started| {
+                let elapsed = now.duration_since(*started);
+                if elapsed < CONNECTION_ATTEMPT_DELAY {
+                    Some(CONNECTION_ATTEMPT_DELAY - elapsed)
+                } else {
+                    None
+                }
+            });
+
+        match (resolution_delay, connection_attempt_delay) {
+            (Some(rd), Some(cad)) => Some(rd.min(cad)),
+            (Some(rd), None) => Some(rd),
+            (None, Some(cad)) => Some(cad),
+            (None, None) => None,
+        }
+        .map(|duration| Output::Timer { duration })
     }
 
     fn send_dns_request(&mut self, now: Instant) -> Option<Output> {
@@ -697,11 +740,10 @@ impl HappyEyeballs {
             .dns_queries
             .iter()
             .filter_map(|q| q.get_response())
-            .map(|r| {
+            .flat_map(|r| {
                 r.inner
                     .flatten_into_endpoints(self.target.1, got_a, got_aaaa, self.protocols())
             })
-            .flatten()
             .filter(|endpoint| {
                 !self
                     .connection_attempts
