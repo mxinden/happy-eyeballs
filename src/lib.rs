@@ -25,8 +25,9 @@
 //! let mut he = HappyEyeballs::new("example.com".into(), 443);
 //!
 //! let mut now = Instant::now();
+//! let mut input = None;
 //! loop {
-//!     match he.process(None, now) {
+//!     match he.process(input.take(), now) {
 //!         None => break, // nothing more to do right now
 //!         Some(Output::SendDnsQuery { hostname, record_type }) => {
 //!             let response = match record_type {
@@ -55,7 +56,7 @@
 //!                     inner: DnsResponseInner::A(Ok(vec![Ipv4Addr::new(192, 0, 2, 1)])),
 //!                 },
 //!             };
-//!             let _ = he.process(Some(Input::DnsResponse(response)), now);
+//!             input = Some(Input::DnsResponse(response));
 //!         }
 //!         Some(Output::AttemptConnection { endpoint }) => {
 //!             let _ = he.process(
