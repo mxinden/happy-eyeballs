@@ -204,7 +204,7 @@ fn setup_with_config(config: NetworkConfig) -> (Instant, HappyEyeballs) {
         .try_init();
 
     let now = Instant::now();
-    let he = HappyEyeballs::with_network_config(HOSTNAME.to_string(), PORT, config);
+    let he = HappyEyeballs::new_with_network_config(HOSTNAME.to_string(), PORT, config);
     (now, he)
 }
 

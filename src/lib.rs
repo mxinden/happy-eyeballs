@@ -528,7 +528,6 @@ impl Endpoint {
 }
 
 /// Happy Eyeballs v3 state machine
-#[derive(Debug)]
 pub struct HappyEyeballs {
     dns_queries: Vec<DnsQuery>,
     connection_attempts: Vec<ConnectionAttempt>,
@@ -539,14 +538,35 @@ pub struct HappyEyeballs {
     target: (TargetName, u16),
 }
 
+impl std::fmt::Debug for HappyEyeballs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut ds = f.debug_struct("HappyEyeballs");
+
+        // Always include target and network configuration.
+        ds.field("target", &self.target);
+        ds.field("network_config", &self.network_config);
+
+        // Only include vectors when non-empty to reduce noise.
+        if !self.dns_queries.is_empty() {
+            ds.field("dns_queries", &self.dns_queries);
+        }
+        if !self.connection_attempts.is_empty() {
+            ds.field("connection_attempts", &self.connection_attempts);
+        }
+
+        ds.finish()
+    }
+}
+
 impl HappyEyeballs {
     /// Create a new Happy Eyeballs state machine with default network config
     pub fn new(hostname: String, port: u16) -> Self {
-        Self::with_network_config(hostname, port, NetworkConfig::default())
+        Self::new_with_network_config(hostname, port, NetworkConfig::default())
     }
 
     /// Create a new Happy Eyeballs state machine with custom network configuration
-    pub fn with_network_config(hostname: String, port: u16, network_config: NetworkConfig) -> Self {
+    #[instrument(skip_all, level = Level::TRACE, fields(target = hostname), ret)]
+    pub fn new_with_network_config(hostname: String, port: u16, network_config: NetworkConfig) -> Self {
         Self {
             network_config,
             dns_queries: Vec::new(),
