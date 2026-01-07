@@ -22,7 +22,7 @@
 //! #     time::Instant,
 //! # };
 //!
-//! let mut he = HappyEyeballs::new("example.com".into(), 443);
+//! let mut he = HappyEyeballs::new("example.com".into(), 443).unwrap();
 //!
 //! let mut now = Instant::now();
 //! let mut input = None;
@@ -79,7 +79,9 @@ use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
+use thiserror::Error;
 use tracing::{Level, instrument, trace};
+use url::Host;
 
 /// > The RECOMMENDED value for the Resolution Delay is 50 milliseconds.
 ///
@@ -272,17 +274,6 @@ pub enum DnsRecordType {
     Https,
     Aaaa,
     A,
-}
-
-/// Timer types for different delays
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TimerType {
-    /// Resolution Delay (50ms recommended)
-    ResolutionDelay,
-    /// Connection Attempt Delay (250ms recommended)
-    ConnectionAttemptDelay,
-    /// Last Resort Local Synthesis Delay (2s recommended)
-    LastResortSynthesis,
 }
 
 /// Service information from HTTPS records
@@ -533,9 +524,26 @@ pub struct HappyEyeballs {
     connection_attempts: Vec<ConnectionAttempt>,
     /// Network configuration
     network_config: NetworkConfig,
-    // TODO: Split in host and port?
-    /// Target hostname and port
-    target: (TargetName, u16),
+    host: Host,
+    port: u16,
+}
+
+#[derive(Error, Debug)]
+#[error(transparent)]
+pub struct ConstructorError {
+    inner: ConstructorErrorInner,
+}
+
+impl From<ConstructorErrorInner> for ConstructorError {
+    fn from(inner: ConstructorErrorInner) -> Self {
+        Self { inner }
+    }
+}
+
+#[derive(Error, Debug)]
+enum ConstructorErrorInner {
+    #[error("invalid host: {0}")]
+    InvalidHost(#[from] url::ParseError),
 }
 
 impl std::fmt::Debug for HappyEyeballs {
@@ -543,7 +551,8 @@ impl std::fmt::Debug for HappyEyeballs {
         let mut ds = f.debug_struct("HappyEyeballs");
 
         // Always include target and network configuration.
-        ds.field("target", &self.target);
+        ds.field("target", &self.host);
+        ds.field("port", &self.port);
         ds.field("network_config", &self.network_config);
 
         // Only include vectors when non-empty to reduce noise.
@@ -560,19 +569,25 @@ impl std::fmt::Debug for HappyEyeballs {
 
 impl HappyEyeballs {
     /// Create a new Happy Eyeballs state machine with default network config
-    pub fn new(hostname: String, port: u16) -> Self {
-        Self::new_with_network_config(hostname, port, NetworkConfig::default())
+    pub fn new(host: &str, port: u16) -> Result<Self, ConstructorError> {
+        Self::new_with_network_config(host, port, NetworkConfig::default())
     }
 
     /// Create a new Happy Eyeballs state machine with custom network configuration
-    #[instrument(skip_all, level = Level::TRACE, fields(target = hostname), ret)]
-    pub fn new_with_network_config(hostname: String, port: u16, network_config: NetworkConfig) -> Self {
-        Self {
+    #[instrument(skip_all, level = Level::TRACE, fields(target = host), ret)]
+    pub fn new_with_network_config(
+        host: &str,
+        port: u16,
+        network_config: NetworkConfig,
+    ) -> Result<Self, ConstructorError> {
+        let host = Host::parse(host).map_err(ConstructorErrorInner::InvalidHost)?;
+        Ok(Self {
             network_config,
             dns_queries: Vec::new(),
             connection_attempts: Vec::new(),
-            target: (TargetName(hostname), port),
-        }
+            host,
+            port,
+        })
     }
 
     // TODO: Does this ever return None given the timeouts?
@@ -583,7 +598,7 @@ impl HappyEyeballs {
     ///
     /// The caller must call [`HappyEyeballs::process`] with input [`None`]
     /// until it returns [`None`] or [`Output::Timer`].
-    #[instrument(skip_all, level = Level::TRACE, fields(target = %self.target.0.0), ret)]
+    #[instrument(skip_all, level = Level::TRACE, fields(target = %self.host), ret)]
     pub fn process(&mut self, input: Option<Input>, now: Instant) -> Option<Output> {
         trace!(input = ?input);
 
@@ -668,6 +683,15 @@ impl HappyEyeballs {
     }
 
     fn send_dns_request(&mut self, now: Instant) -> Option<Output> {
+        let target_name: TargetName = match &self.host {
+            Host::Ipv4(_) | Host::Ipv6(_) => {
+                // No DNS queries needed for IP hosts.
+                return None;
+            }
+            Host::Domain(domain) => domain.as_str(),
+        }
+        .into();
+
         // TODO: What if v4 or v6 is disabled? Don't send the query.
         for record_type in [DnsRecordType::Https, DnsRecordType::Aaaa, DnsRecordType::A] {
             if !self
@@ -677,11 +701,11 @@ impl HappyEyeballs {
             {
                 self.dns_queries.push(DnsQuery::InProgress {
                     started: now,
-                    target_name: self.target.0.clone(),
+                    target_name: target_name.clone(),
                     record_type,
                 });
                 return Some(Output::SendDnsQuery {
-                    hostname: self.target.0.clone(),
+                    hostname: target_name,
                     record_type,
                 });
             }
@@ -779,6 +803,7 @@ impl HappyEyeballs {
         let mut move_on = false;
         move_on |= self.move_on_without_timeout();
         move_on |= self.move_on_with_timeout(now);
+        move_on |= matches!(self.host, Host::Ipv4(_) | Host::Ipv6(_));
         if !move_on {
             return None;
         }
@@ -797,6 +822,24 @@ impl HappyEyeballs {
     }
 
     fn next_endpoint_to_attempt(&self) -> Option<Endpoint> {
+        match self.host {
+            Host::Ipv4(ipv4_addr) => {
+                let protocols = self.protocols();
+                return Some(Endpoint {
+                    address: SocketAddr::new(IpAddr::V4(ipv4_addr), self.port),
+                    protocol: *protocols.iter().next()?,
+                });
+            }
+            Host::Ipv6(ipv6_addr) => {
+                let protocols = self.protocols();
+                return Some(Endpoint {
+                    address: SocketAddr::new(IpAddr::V6(ipv6_addr), self.port),
+                    protocol: *protocols.iter().next()?,
+                });
+            }
+            Host::Domain(_) => {}
+        }
+
         let got_a = self.got_dns_a_response();
         let got_aaaa = self.got_dns_aaaa_response();
         let mut endpoints = self
@@ -805,7 +848,7 @@ impl HappyEyeballs {
             .filter_map(|q| q.get_response())
             .flat_map(|r| {
                 r.inner
-                    .flatten_into_endpoints(self.target.1, got_a, got_aaaa, self.protocols())
+                    .flatten_into_endpoints(self.port, got_a, got_aaaa, self.protocols())
             })
             .filter(|endpoint| {
                 !self
@@ -821,7 +864,14 @@ impl HappyEyeballs {
     fn got_dns_aaaa_response(&self) -> bool {
         self.dns_queries
             .iter()
-            .filter(|q| *q.target_name() == self.target.0)
+            .filter(|q| {
+                *q.target_name()
+                    == match &self.host {
+                        Host::Domain(d) => d.as_str().into(),
+                        Host::Ipv4(_ipv4_addr) => todo!(),
+                        Host::Ipv6(_ipv6_addr) => todo!(),
+                    }
+            })
             .any(|q| {
                 matches!(
                     q,
@@ -839,7 +889,14 @@ impl HappyEyeballs {
     fn got_dns_a_response(&self) -> bool {
         self.dns_queries
             .iter()
-            .filter(|q| *q.target_name() == self.target.0)
+            .filter(|q| {
+                *q.target_name()
+                    == match &self.host {
+                        Host::Domain(d) => d.as_str().into(),
+                        Host::Ipv4(_ipv4_addr) => todo!(),
+                        Host::Ipv6(_ipv6_addr) => todo!(),
+                    }
+            })
             .any(|q| {
                 matches!(
                     q,
@@ -891,11 +948,14 @@ impl HappyEyeballs {
     /// Whether to move on to the connection attempt phase based on the received
     /// DNS responses, not based on a timeout.
     fn move_on_without_timeout(&mut self) -> bool {
-        if self
-            .dns_queries
-            .iter()
-            .any(|q| *q.target_name() != self.target.0)
-        {
+        if self.dns_queries.iter().any(|q| {
+            *q.target_name()
+                != match &self.host {
+                    Host::Domain(d) => d.as_str().into(),
+                    Host::Ipv4(_ipv4_addr) => todo!(),
+                    Host::Ipv6(_ipv6_addr) => todo!(),
+                }
+        }) {
             debug_assert!(
                 false,
                 "function currently can't handle different target names"
@@ -951,11 +1011,14 @@ impl HappyEyeballs {
 
     /// Whether to move on to the connection attempt phase based on a timeout.
     fn move_on_with_timeout(&mut self, now: Instant) -> bool {
-        if self
-            .dns_queries
-            .iter()
-            .any(|q| *q.target_name() != self.target.0)
-        {
+        if self.dns_queries.iter().any(|q| {
+            *q.target_name()
+                != match &self.host {
+                    Host::Domain(d) => d.as_str().into(),
+                    Host::Ipv4(_ipv4_addr) => todo!(),
+                    Host::Ipv6(_ipv6_addr) => todo!(),
+                }
+        }) {
             debug_assert!(
                 false,
                 "function currently can't handle different target names"

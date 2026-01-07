@@ -5,7 +5,9 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+thiserror = { version = "2.0.12", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["attributes"] }
+url = { version = "2.5.7", default-features = false }
 
 [dev-dependencies]
 tracing = { version = "0.1", default-features = true }

@@ -204,7 +204,7 @@ fn setup_with_config(config: NetworkConfig) -> (Instant, HappyEyeballs) {
         .try_init();
 
     let now = Instant::now();
-    let he = HappyEyeballs::new_with_network_config(HOSTNAME.to_string(), PORT, config);
+    let he = HappyEyeballs::new_with_network_config(HOSTNAME, PORT, config).unwrap();
     (now, he)
 }
 
@@ -221,7 +221,6 @@ fn initial_state() {
 /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4>
 #[cfg(test)]
 mod section_4_hostname_resolution {
-
     use super::*;
 
     /// > All of the DNS queries SHOULD be made as soon after one another as
@@ -584,4 +583,12 @@ fn ipv6_blackhole() {
     }
 
     panic!("Did not fall back to IPv4.");
+}
+
+#[test]
+fn ip_host() {
+    let now = Instant::now();
+    let mut he = HappyEyeballs::new("[2001:0DB8::1]", PORT).unwrap();
+
+    he.expect(vec![(None, Some(out_attempt_v6()))], now);
 }
