@@ -592,3 +592,9 @@ fn ip_host() {
 
     he.expect(vec![(None, Some(out_attempt_v6()))], now);
 }
+
+#[test]
+#[ignore]
+fn root_label() {
+    todo!("compare example.com. with example.com")
+}
