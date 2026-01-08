@@ -171,7 +171,7 @@ impl DnsResponseInner {
         port: u16,
         got_a: bool,
         got_aaaa: bool,
-        protocols: HashSet<Protocol>,
+        protocols: HashSet<ProtocolCombination>,
     ) -> Vec<Endpoint> {
         match self {
             DnsResponseInner::Https(infos) => infos
@@ -333,11 +333,13 @@ impl ServiceInfo {
                 IpAddr::V4(_) => !got_a,
             })
             .flat_map(|ip| {
-                self.alpn_protocols.iter().map(move |alpn| Endpoint {
-                    address: SocketAddr::new(ip, port),
-                    // TODO: Only take the overlap with HappyEyeballs::protocols().
-                    protocol: *alpn,
-                })
+                ProtocolCombination::from_protocols(&self.alpn_protocols)
+                    .into_iter()
+                    .map(move |protocol| Endpoint {
+                        address: SocketAddr::new(ip, port),
+                        // TODO: Only take the overlap with HappyEyeballs::protocols().
+                        protocol,
+                    })
             })
             .collect()
     }
@@ -348,6 +350,36 @@ pub enum Protocol {
     H3,
     H2,
     H1,
+}
+
+/// Possible connection attempt protocol combinations.
+///
+/// While on a QUIC connection one can only use HTTP/3, on a TCP connection one
+/// might either negotiate HTTP/2 or HTTP/1.1 via TLS ALPN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ProtocolCombination {
+    H3,
+    H2OrH1,
+    H2,
+    H1,
+}
+
+impl ProtocolCombination {
+    /// [`Protocol::H2`] and [`Protocol::H1`] into [`ProtocolCombination::H2OrH1`].
+    fn from_protocols(protocols: &HashSet<Protocol>) -> HashSet<ProtocolCombination> {
+        let mut combinations = HashSet::new();
+        if protocols.contains(&Protocol::H3) {
+            combinations.insert(ProtocolCombination::H3);
+        }
+        if protocols.contains(&Protocol::H2) && protocols.contains(&Protocol::H1) {
+            combinations.insert(ProtocolCombination::H2OrH1);
+        } else if protocols.contains(&Protocol::H2) {
+            combinations.insert(ProtocolCombination::H2);
+        } else if protocols.contains(&Protocol::H1) {
+            combinations.insert(ProtocolCombination::H1);
+        }
+        combinations
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -495,8 +527,7 @@ impl ConnectionAttempt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
     pub address: SocketAddr,
-    // TODO: Currently just taking H2, when really it should be H1 and H2. Is that a problem?
-    pub protocol: Protocol,
+    pub protocol: ProtocolCombination,
 }
 
 impl Endpoint {
@@ -824,14 +855,14 @@ impl HappyEyeballs {
     fn next_endpoint_to_attempt(&self) -> Option<Endpoint> {
         match self.host {
             Host::Ipv4(ipv4_addr) => {
-                let protocols = self.protocols();
+                let protocols = self.connection_attempt_protocols();
                 return Some(Endpoint {
                     address: SocketAddr::new(IpAddr::V4(ipv4_addr), self.port),
                     protocol: *protocols.iter().next()?,
                 });
             }
             Host::Ipv6(ipv6_addr) => {
-                let protocols = self.protocols();
+                let protocols = self.connection_attempt_protocols();
                 return Some(Endpoint {
                     address: SocketAddr::new(IpAddr::V6(ipv6_addr), self.port),
                     protocol: *protocols.iter().next()?,
@@ -847,8 +878,12 @@ impl HappyEyeballs {
             .iter()
             .filter_map(|q| q.get_response())
             .flat_map(|r| {
-                r.inner
-                    .flatten_into_endpoints(self.port, got_a, got_aaaa, self.protocols())
+                r.inner.flatten_into_endpoints(
+                    self.port,
+                    got_a,
+                    got_aaaa,
+                    self.connection_attempt_protocols(),
+                )
             })
             .filter(|endpoint| {
                 !self
@@ -911,9 +946,9 @@ impl HappyEyeballs {
             })
     }
 
-    fn protocols(&self) -> HashSet<Protocol> {
+    fn connection_attempt_protocols(&self) -> HashSet<ProtocolCombination> {
         // TODO: assuming h2. correct?
-        let mut protocols = HashSet::from([Protocol::H2]);
+        let mut protocols = HashSet::from([Protocol::H2, Protocol::H1]);
         for alpn in self.dns_queries.iter().filter_map(|q| match q {
             DnsQuery::Completed {
                 response:
@@ -942,7 +977,8 @@ impl HappyEyeballs {
         if !self.network_config.http_versions.h1 {
             protocols.remove(&Protocol::H1);
         }
-        protocols
+
+        ProtocolCombination::from_protocols(&protocols)
     }
 
     /// Whether to move on to the connection attempt phase based on the received
