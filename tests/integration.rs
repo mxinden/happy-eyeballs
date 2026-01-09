@@ -594,6 +594,13 @@ fn ip_host() {
 }
 
 #[test]
+fn not_url_but_ip() {
+    // Neither of these are a valid URL, but they are valid IP addresses.
+    HappyEyeballs::new("::1", PORT).unwrap();
+    HappyEyeballs::new("127.0.0.1", PORT).unwrap();
+}
+
+#[test]
 #[ignore]
 fn root_label() {
     todo!("compare example.com. with example.com")

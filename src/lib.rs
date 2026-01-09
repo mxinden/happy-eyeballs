@@ -611,7 +611,16 @@ impl HappyEyeballs {
         port: u16,
         network_config: NetworkConfig,
     ) -> Result<Self, ConstructorError> {
-        let host = Host::parse(host).map_err(ConstructorErrorInner::InvalidHost)?;
+        // Prefer URL-style host parsing (domains and bracketed IPv6).
+        // If that fails, accept raw IP literals (IPv4/IPv6) without brackets.
+        let host = match Host::parse(host) {
+            Ok(h) => h,
+            Err(e) => match host.parse::<IpAddr>() {
+                Ok(IpAddr::V4(v4)) => Host::Ipv4(v4),
+                Ok(IpAddr::V6(v6)) => Host::Ipv6(v6),
+                Err(_) => return Err(ConstructorErrorInner::InvalidHost(e).into()),
+            },
+        };
         Ok(Self {
             network_config,
             dns_queries: Vec::new(),
