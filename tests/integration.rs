@@ -11,8 +11,9 @@ use happy_eyeballs::{
 };
 use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
 
-// TODO: Handle difference between com. and com? Use library for hostnames?!
-const HOSTNAME: &str = "example.com.";
+
+// TODO: Should crate treat "example.com" and "example.com." the same?
+const HOSTNAME: &str = "example.com";
 const PORT: u16 = 443;
 const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
 const V6_ADDR_2: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2);
@@ -34,10 +35,10 @@ impl HappyEyeballsExt for HappyEyeballs {
 
 fn in_dns_https_positive() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com.".into(),
+        target_name: HOSTNAME.into(),
         inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
-            target_name: "example.com.".into(),
+            target_name: HOSTNAME.into(),
             alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
             ipv6_hints: vec![],
             ipv4_hints: vec![],
@@ -48,10 +49,10 @@ fn in_dns_https_positive() -> Input {
 
 fn in_dns_https_positive_no_alpn() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com.".into(),
+        target_name: HOSTNAME.into(),
         inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
-            target_name: "example.com.".into(),
+            target_name: HOSTNAME.into(),
             alpn_protocols: HashSet::new(),
             ipv6_hints: vec![],
             ipv4_hints: vec![],
@@ -62,10 +63,10 @@ fn in_dns_https_positive_no_alpn() -> Input {
 
 fn in_dns_https_positive_v6_hints() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com.".into(),
+        target_name: HOSTNAME.into(),
         inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
-            target_name: "example.com.".into(),
+            target_name: HOSTNAME.into(),
             alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
             ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)],
             ipv4_hints: vec![],
@@ -76,7 +77,7 @@ fn in_dns_https_positive_v6_hints() -> Input {
 
 fn in_dns_https_positive_svc1() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com.".into(),
+        target_name: HOSTNAME.into(),
         inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: "svc1.example.com.".into(),
@@ -90,35 +91,35 @@ fn in_dns_https_positive_svc1() -> Input {
 
 fn in_dns_https_negative() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com.".into(),
+        target_name: HOSTNAME.into(),
         inner: DnsResponseInner::Https(Err(())),
     })
 }
 
 fn in_dns_aaaa_positive() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com.".into(),
+        target_name: HOSTNAME.into(),
         inner: DnsResponseInner::Aaaa(Ok(vec![V6_ADDR])),
     })
 }
 
 fn in_dns_a_positive() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com.".into(),
+        target_name: HOSTNAME.into(),
         inner: DnsResponseInner::A(Ok(vec![V4_ADDR])),
     })
 }
 
 fn in_dns_aaaa_negative() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com.".into(),
+        target_name: HOSTNAME.into(),
         inner: DnsResponseInner::Aaaa(Err(())),
     })
 }
 
 fn in_dns_a_negative() -> Input {
     Input::DnsResponse(DnsResponse {
-        target_name: "example.com.".into(),
+        target_name: HOSTNAME.into(),
         inner: DnsResponseInner::A(Err(())),
     })
 }
@@ -477,7 +478,7 @@ mod section_4_hostname_resolution {
                 (Some(in_dns_a_negative()), Some(out_resolution_delay())),
                 (
                     Some(Input::DnsResponse(DnsResponse {
-                        target_name: "example.com.".into(),
+                        target_name: HOSTNAME.into(),
                         inner: DnsResponseInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2, V6_ADDR_3])),
                     })),
                     Some(out_attempt_v6()),
@@ -572,7 +573,7 @@ mod section_6_connection_attempts {
                 ),
                 (
                     Some(Input::DnsResponse(DnsResponse {
-                        target_name: "example.com.".into(),
+                        target_name: HOSTNAME.into(),
                         inner: DnsResponseInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2])),
                     })),
                     Some(out_attempt_v6()),
@@ -701,10 +702,4 @@ fn not_url_but_ip() {
     // Neither of these are a valid URL, but they are valid IP addresses.
     HappyEyeballs::new("::1", PORT).unwrap();
     HappyEyeballs::new("127.0.0.1", PORT).unwrap();
-}
-
-#[test]
-#[ignore]
-fn root_label() {
-    todo!("compare example.com. with example.com")
 }
