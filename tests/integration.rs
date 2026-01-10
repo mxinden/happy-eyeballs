@@ -556,6 +556,109 @@ mod section_6_connection_attempts {
 
         he.expect(vec![(None, None)], now);
     }
+
+    #[test]
+    fn successful_connection_cancels_others() {
+        let (mut now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                (
+                    Some(in_dns_https_positive_no_alpn()),
+                    Some(out_resolution_delay()),
+                ),
+                (
+                    Some(Input::DnsResponse(DnsResponse {
+                        target_name: "example.com.".into(),
+                        inner: DnsResponseInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2])),
+                    })),
+                    Some(out_attempt_v6()),
+                ),
+                (
+                    Some(in_dns_a_positive()),
+                    Some(out_connection_attempt_delay()),
+                ),
+            ],
+            now,
+        );
+
+        now += CONNECTION_ATTEMPT_DELAY;
+        he.expect(
+            vec![(
+                None,
+                Some(Output::AttemptConnection {
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR_2.into(), PORT),
+                        protocol: ProtocolCombination::H2OrH1,
+                    },
+                }),
+            )],
+            now,
+        );
+
+        now += CONNECTION_ATTEMPT_DELAY;
+        he.expect(vec![(None, Some(out_attempt_v4()))], now);
+        he.expect(
+            vec![
+                (
+                    Some(Input::ConnectionResult {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        result: Ok(()),
+                    }),
+                    Some(Output::CancelConnection(SocketAddr::new(
+                        V6_ADDR_2.into(),
+                        PORT,
+                    ))),
+                ),
+                (
+                    None,
+                    Some(Output::CancelConnection(SocketAddr::new(
+                        V4_ADDR.into(),
+                        PORT,
+                    ))),
+                ),
+                (None, None),
+            ],
+            now,
+        );
+    }
+
+    #[test]
+    fn failed_connection_tries_next_immediately() {
+        let (now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                (
+                    Some(in_dns_https_positive_no_alpn()),
+                    Some(out_resolution_delay()),
+                ),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                (
+                    Some(in_dns_a_positive()),
+                    Some(out_connection_attempt_delay()),
+                ),
+            ],
+            now,
+        );
+
+        he.expect(
+            vec![(
+                Some(Input::ConnectionResult {
+                    address: SocketAddr::new(V6_ADDR.into(), PORT),
+                    result: Err("connection refused".to_string()),
+                }),
+                Some(out_attempt_v4()),
+            )],
+            now,
+        );
+    }
 }
 
 #[test]

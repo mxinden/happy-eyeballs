@@ -511,10 +511,18 @@ impl NetworkConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConnectionState {
+    InProgress,
+    Succeeded,
+    Failed,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConnectionAttempt {
     pub endpoint: Endpoint,
     pub started: Instant,
+    pub state: ConnectionState,
 }
 
 impl ConnectionAttempt {
@@ -645,8 +653,17 @@ impl HappyEyeballs {
         // Handle input.
         let output = match input {
             Some(Input::DnsResponse(response)) => self.on_dns_response(response),
+            Some(Input::ConnectionResult { address, result }) => {
+                self.on_connection_result(address, result)
+            }
             _ => None,
         };
+        if output.is_some() {
+            return output;
+        }
+
+        // Check if we have any successful connection that requires canceling other attempts
+        let output = self.cancel_remaining_attempts();
         if output.is_some() {
             return output;
         }
@@ -678,6 +695,15 @@ impl HappyEyeballs {
     }
 
     fn timer(&self, now: Instant) -> Option<Output> {
+        // If we have a successful connection, no timers needed
+        if self
+            .connection_attempts
+            .iter()
+            .any(|a| a.state == ConnectionState::Succeeded)
+        {
+            return None;
+        }
+
         let resolution_delay = self
             .dns_queries
             .iter()
@@ -702,6 +728,7 @@ impl HappyEyeballs {
         let connection_attempt_delay = self
             .connection_attempts
             .iter()
+            .filter(|a| a.state == ConnectionState::InProgress)
             .map(|a| &a.started)
             .max()
             .and_then(|started| {
@@ -825,6 +852,75 @@ impl HappyEyeballs {
         None
     }
 
+    /// > When one connection attempt succeeds (generally when the TCP handshake
+    /// > completes), all other connections attempts that have not yet succeeded
+    /// > SHOULD be canceled. Any address that was not yet attempted as a
+    /// > connection SHOULD be ignored.
+    ///
+    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-6>
+    fn on_connection_result(
+        &mut self,
+        address: SocketAddr,
+        result: Result<(), String>,
+    ) -> Option<Output> {
+        // Find the connection attempt for this address
+        let attempt = self
+            .connection_attempts
+            .iter_mut()
+            .find(|attempt| attempt.endpoint.address == address);
+
+        let Some(attempt) = attempt else {
+            debug_assert!(
+                false,
+                "got connection result for {address:?} but never attempted connection"
+            );
+            return None;
+        };
+
+        match result {
+            Ok(()) => {
+                // Mark this connection as succeeded
+                attempt.state = ConnectionState::Succeeded;
+                // Cancellations will be issued by cancel_remaining_attempts()
+                None
+            }
+            Err(_error) => {
+                // Mark connection as failed
+                attempt.state = ConnectionState::Failed;
+
+                // The state machine will naturally attempt the next connection
+                // when process() is called again with None input
+                None
+            }
+        }
+    }
+
+    /// If a connection has succeeded, cancel all remaining in-progress attempts.
+    fn cancel_remaining_attempts(&mut self) -> Option<Output> {
+        // Check if we have a successful connection
+        let has_success = self
+            .connection_attempts
+            .iter()
+            .any(|a| a.state == ConnectionState::Succeeded);
+
+        if !has_success {
+            return None;
+        }
+
+        // Find the first in-progress attempt to cancel
+        if let Some(attempt) = self
+            .connection_attempts
+            .iter_mut()
+            .find(|a| a.state == ConnectionState::InProgress)
+        {
+            let address = attempt.endpoint.address;
+            attempt.state = ConnectionState::Failed;
+            return Some(Output::CancelConnection(address));
+        }
+
+        None
+    }
+
     /// > The client moves onto sorting addresses and establishing connections
     /// > once one of the following condition sets is met:
     /// >
@@ -848,7 +944,12 @@ impl HappyEyeballs {
             return None;
         }
 
-        if self.connection_attempts.iter().any(|a| a.within_delay(now)) {
+        if self
+            .connection_attempts
+            .iter()
+            .filter(|a| a.state == ConnectionState::InProgress)
+            .any(|a| a.within_delay(now))
+        {
             return None;
         }
         let endpoint = self.next_endpoint_to_attempt()?;
@@ -856,6 +957,7 @@ impl HappyEyeballs {
         self.connection_attempts.push(ConnectionAttempt {
             endpoint: endpoint.clone(),
             started: now,
+            state: ConnectionState::InProgress,
         });
 
         Some(Output::AttemptConnection { endpoint })
