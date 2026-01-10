@@ -5,12 +5,11 @@ use std::{
 };
 
 use happy_eyeballs::{
-    CONNECTION_ATTEMPT_DELAY, DnsRecordType, DnsResponse, DnsResponseInner, Endpoint,
-    HappyEyeballs, HttpVersions, Input, IpPreference, NetworkConfig, Output, Protocol,
-    ProtocolCombination, RESOLUTION_DELAY,
+    CONNECTION_ATTEMPT_DELAY, DnsRecordType, DnsResult, DnsResultInner, Endpoint, HappyEyeballs,
+    HttpVersions, Input, IpPreference, NetworkConfig, Output, Protocol, ProtocolCombination,
+    RESOLUTION_DELAY,
 };
 use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
-
 
 // TODO: Should crate treat "example.com" and "example.com." the same?
 const HOSTNAME: &str = "example.com";
@@ -34,9 +33,9 @@ impl HappyEyeballsExt for HappyEyeballs {
 }
 
 fn in_dns_https_positive() -> Input {
-    Input::DnsResponse(DnsResponse {
+    Input::DnsResult(DnsResult {
         target_name: HOSTNAME.into(),
-        inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+        inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: HOSTNAME.into(),
             alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
@@ -48,9 +47,9 @@ fn in_dns_https_positive() -> Input {
 }
 
 fn in_dns_https_positive_no_alpn() -> Input {
-    Input::DnsResponse(DnsResponse {
+    Input::DnsResult(DnsResult {
         target_name: HOSTNAME.into(),
-        inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+        inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: HOSTNAME.into(),
             alpn_protocols: HashSet::new(),
@@ -62,9 +61,9 @@ fn in_dns_https_positive_no_alpn() -> Input {
 }
 
 fn in_dns_https_positive_v6_hints() -> Input {
-    Input::DnsResponse(DnsResponse {
+    Input::DnsResult(DnsResult {
         target_name: HOSTNAME.into(),
-        inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+        inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: HOSTNAME.into(),
             alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
@@ -76,9 +75,9 @@ fn in_dns_https_positive_v6_hints() -> Input {
 }
 
 fn in_dns_https_positive_svc1() -> Input {
-    Input::DnsResponse(DnsResponse {
+    Input::DnsResult(DnsResult {
         target_name: HOSTNAME.into(),
-        inner: DnsResponseInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+        inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: "svc1.example.com.".into(),
             alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
@@ -90,37 +89,37 @@ fn in_dns_https_positive_svc1() -> Input {
 }
 
 fn in_dns_https_negative() -> Input {
-    Input::DnsResponse(DnsResponse {
+    Input::DnsResult(DnsResult {
         target_name: HOSTNAME.into(),
-        inner: DnsResponseInner::Https(Err(())),
+        inner: DnsResultInner::Https(Err(())),
     })
 }
 
 fn in_dns_aaaa_positive() -> Input {
-    Input::DnsResponse(DnsResponse {
+    Input::DnsResult(DnsResult {
         target_name: HOSTNAME.into(),
-        inner: DnsResponseInner::Aaaa(Ok(vec![V6_ADDR])),
+        inner: DnsResultInner::Aaaa(Ok(vec![V6_ADDR])),
     })
 }
 
 fn in_dns_a_positive() -> Input {
-    Input::DnsResponse(DnsResponse {
+    Input::DnsResult(DnsResult {
         target_name: HOSTNAME.into(),
-        inner: DnsResponseInner::A(Ok(vec![V4_ADDR])),
+        inner: DnsResultInner::A(Ok(vec![V4_ADDR])),
     })
 }
 
 fn in_dns_aaaa_negative() -> Input {
-    Input::DnsResponse(DnsResponse {
+    Input::DnsResult(DnsResult {
         target_name: HOSTNAME.into(),
-        inner: DnsResponseInner::Aaaa(Err(())),
+        inner: DnsResultInner::Aaaa(Err(())),
     })
 }
 
 fn in_dns_a_negative() -> Input {
-    Input::DnsResponse(DnsResponse {
+    Input::DnsResult(DnsResult {
         target_name: HOSTNAME.into(),
-        inner: DnsResponseInner::A(Err(())),
+        inner: DnsResultInner::A(Err(())),
     })
 }
 
@@ -477,9 +476,9 @@ mod section_4_hostname_resolution {
                 (Some(in_dns_https_negative()), Some(out_resolution_delay())),
                 (Some(in_dns_a_negative()), Some(out_resolution_delay())),
                 (
-                    Some(Input::DnsResponse(DnsResponse {
+                    Some(Input::DnsResult(DnsResult {
                         target_name: HOSTNAME.into(),
-                        inner: DnsResponseInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2, V6_ADDR_3])),
+                        inner: DnsResultInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2, V6_ADDR_3])),
                     })),
                     Some(out_attempt_v6()),
                 ),
@@ -572,9 +571,9 @@ mod section_6_connection_attempts {
                     Some(out_resolution_delay()),
                 ),
                 (
-                    Some(Input::DnsResponse(DnsResponse {
+                    Some(Input::DnsResult(DnsResult {
                         target_name: HOSTNAME.into(),
-                        inner: DnsResponseInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2])),
+                        inner: DnsResultInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2])),
                     })),
                     Some(out_attempt_v6()),
                 ),
