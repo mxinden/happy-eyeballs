@@ -507,6 +507,23 @@ mod section_4_hostname_resolution {
             now,
         );
     }
+
+    #[test]
+    fn dns_failed() {
+        let (now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                (Some(in_dns_https_negative()), Some(out_resolution_delay())),
+                (Some(in_dns_aaaa_negative()), Some(out_resolution_delay())),
+                (Some(in_dns_a_negative()), Some(Output::Failed)),
+            ],
+            now,
+        );
+    }
 }
 
 // TODO: Move to own file?

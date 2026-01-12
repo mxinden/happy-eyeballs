@@ -69,6 +69,7 @@
 //!         Some(Output::Timer { duration }) => {
 //!             now += duration;
 //!         }
+//!         Some(Output::Failed) => break,
 //!     }
 //! }
 //! ```
@@ -231,15 +232,20 @@ pub enum Output {
     },
 
     /// Start a timer
-    Timer { duration: Duration },
+    Timer {
+        duration: Duration,
+    },
 
     /// Attempt to connect to an address
-    AttemptConnection { endpoint: Endpoint },
+    AttemptConnection {
+        endpoint: Endpoint,
+    },
 
     // TODO: Consider a CancelSendDnsQuery.
     /// Cancel a connection attempt
     CancelConnection(SocketAddr),
-    // TODO: Should there be an event for giving up?
+
+    Failed,
 }
 
 impl Output {
@@ -687,16 +693,19 @@ impl HappyEyeballs {
             return output;
         }
 
+        if !self.has_successful_connection()
+            && !self.has_pending_queries()
+            && !self.has_pending_connections()
+        {
+            return Some(Output::Failed);
+        }
+
         None
     }
 
     fn timer(&self, now: Instant) -> Option<Output> {
         // If we have a successful connection, no timers needed
-        if self
-            .connection_attempts
-            .iter()
-            .any(|a| a.state == ConnectionState::Succeeded)
-        {
+        if self.has_successful_connection() {
             return None;
         }
 
@@ -894,12 +903,7 @@ impl HappyEyeballs {
     /// If a connection has succeeded, cancel all remaining in-progress attempts.
     fn cancel_remaining_attempts(&mut self) -> Option<Output> {
         // Check if we have a successful connection
-        let has_success = self
-            .connection_attempts
-            .iter()
-            .any(|a| a.state == ConnectionState::Succeeded);
-
-        if !has_success {
+        if !self.has_successful_connection() {
             return None;
         }
 
@@ -1051,6 +1055,24 @@ impl HappyEyeballs {
                     } if !addrs.is_empty()
                 )
             })
+    }
+
+    fn has_successful_connection(&self) -> bool {
+        self.connection_attempts
+            .iter()
+            .any(|a| a.state == ConnectionState::Succeeded)
+    }
+
+    fn has_pending_queries(&self) -> bool {
+        self.dns_queries
+            .iter()
+            .any(|q| matches!(q, DnsQuery::InProgress { .. }))
+    }
+
+    fn has_pending_connections(&self) -> bool {
+        self.connection_attempts
+            .iter()
+            .any(|a| a.state == ConnectionState::InProgress)
     }
 
     fn connection_attempt_protocols(&self) -> HashSet<ProtocolCombination> {
