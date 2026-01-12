@@ -700,6 +700,9 @@ impl HappyEyeballs {
             return Some(Output::Failed);
         }
 
+        // TODO: Instead of returning None, how about happy-eyeballs also owns
+        // the dns and connection attempt timeout, thus returning either that
+        // timeout, or Output::Failed here.
         None
     }
 
