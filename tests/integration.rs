@@ -5,9 +5,9 @@ use std::{
 };
 
 use happy_eyeballs::{
-    CONNECTION_ATTEMPT_DELAY, DnsRecordType, DnsResult, DnsResultInner, Endpoint, HappyEyeballs,
-    HttpVersions, Input, IpPreference, NetworkConfig, Output, Protocol, ProtocolCombination,
-    RESOLUTION_DELAY,
+    AltSvc, CONNECTION_ATTEMPT_DELAY, DnsRecordType, DnsResult, DnsResultInner, Endpoint,
+    HappyEyeballs, HttpVersions, Input, IpPreference, NetworkConfig, Output, Protocol,
+    ProtocolCombination, RESOLUTION_DELAY,
 };
 use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
 
@@ -294,6 +294,7 @@ mod section_4_hostname_resolution {
                 address_family: NetworkConfig {
                     http_versions: HttpVersions::default(),
                     ip: IpPreference::DualStackPreferV6,
+                    alt_svc: Vec::new(),
                 },
                 positive: in_dns_aaaa_positive(),
                 preferred: None,
@@ -304,6 +305,7 @@ mod section_4_hostname_resolution {
                 address_family: NetworkConfig {
                     http_versions: HttpVersions::default(),
                     ip: IpPreference::DualStackPreferV6,
+                    alt_svc: Vec::new(),
                 },
                 positive: in_dns_a_positive(),
                 preferred: Some(in_dns_aaaa_positive()),
@@ -314,6 +316,7 @@ mod section_4_hostname_resolution {
                 address_family: NetworkConfig {
                     http_versions: HttpVersions::default(),
                     ip: IpPreference::DualStackPreferV6,
+                    alt_svc: Vec::new(),
                 },
                 positive: in_dns_a_positive(),
                 preferred: Some(in_dns_aaaa_negative()),
@@ -324,6 +327,7 @@ mod section_4_hostname_resolution {
                 address_family: NetworkConfig {
                     http_versions: HttpVersions::default(),
                     ip: IpPreference::DualStackPreferV4,
+                    alt_svc: Vec::new(),
                 },
                 positive: in_dns_a_positive(),
                 preferred: None,
@@ -334,6 +338,7 @@ mod section_4_hostname_resolution {
                 address_family: NetworkConfig {
                     http_versions: HttpVersions::default(),
                     ip: IpPreference::DualStackPreferV4,
+                    alt_svc: Vec::new(),
                 },
                 positive: in_dns_aaaa_positive(),
                 preferred: Some(in_dns_a_positive()),
@@ -344,6 +349,7 @@ mod section_4_hostname_resolution {
                 address_family: NetworkConfig {
                     http_versions: HttpVersions::default(),
                     ip: IpPreference::DualStackPreferV4,
+                    alt_svc: Vec::new(),
                 },
                 positive: in_dns_aaaa_positive(),
                 preferred: Some(in_dns_a_negative()),
@@ -701,4 +707,50 @@ fn not_url_but_ip() {
     // Neither of these are a valid URL, but they are valid IP addresses.
     HappyEyeballs::new("::1", PORT).unwrap();
     HappyEyeballs::new("127.0.0.1", PORT).unwrap();
+}
+
+#[test]
+fn alt_svc_construction() {
+    let now = Instant::now();
+    let config = NetworkConfig {
+        http_versions: HttpVersions::default(),
+        ip: IpPreference::DualStackPreferV6,
+        alt_svc: vec![AltSvc {
+            host: None,
+            port: None,
+            protocol: Protocol::H3,
+        }],
+    };
+    let mut he = HappyEyeballs::new_with_network_config(HOSTNAME, PORT, config).unwrap();
+
+    // Should still send DNS queries as normal
+    he.expect(vec![(None, Some(out_send_dns_https()))], now);
+}
+
+#[test]
+fn alt_svc_used_immediately() {
+    let now = Instant::now();
+    let config = NetworkConfig {
+        http_versions: HttpVersions::default(),
+        ip: IpPreference::DualStackPreferV6,
+        alt_svc: vec![AltSvc {
+            host: None,
+            port: None,
+            protocol: Protocol::H3,
+        }],
+    };
+    let mut he = HappyEyeballs::new_with_network_config(HOSTNAME, PORT, config).unwrap();
+
+    // Alt-svc with H3 should make H3 available even without HTTPS DNS response
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https())),
+            (None, Some(out_send_dns_aaaa())),
+            (None, Some(out_send_dns_a())),
+            (Some(in_dns_https_negative()), Some(out_resolution_delay())),
+            // Alt-svc provided H3, so we should attempt H3 connection
+            (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h3())),
+        ],
+        now,
+    );
 }

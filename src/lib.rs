@@ -439,6 +439,16 @@ pub enum IpPreference {
     Ipv4Only,
 }
 
+/// Alternative service information from previous connections.
+///
+/// See [RFC 7838](https://datatracker.ietf.org/doc/html/rfc7838).
+#[derive(Debug, Clone)]
+pub struct AltSvc {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub protocol: Protocol,
+}
+
 // TODO: Allow user to provide alt-svc information from previous connections.
 //
 // TODO: We need to track whether HTTP RR DNS is enabled or disabled.
@@ -461,12 +471,14 @@ pub enum IpPreference {
 // for v2 of the project.
 //
 /// Network configuration for Happy Eyeballs behavior
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct NetworkConfig {
     /// Supported HTTP versions
     pub http_versions: HttpVersions,
     /// IP connectivity and preference
     pub ip: IpPreference,
+    /// Alternative services from previous connections
+    pub alt_svc: Vec<AltSvc>,
 }
 
 impl Default for NetworkConfig {
@@ -474,6 +486,7 @@ impl Default for NetworkConfig {
         NetworkConfig {
             http_versions: HttpVersions::default(),
             ip: IpPreference::DualStackPreferV6,
+            alt_svc: Vec::new(),
         }
     }
 }
@@ -1043,6 +1056,8 @@ impl HappyEyeballs {
     fn connection_attempt_protocols(&self) -> HashSet<ProtocolCombination> {
         // TODO: assuming h2. correct?
         let mut protocols = HashSet::from([Protocol::H2, Protocol::H1]);
+
+        // Add protocols from DNS HTTPS records
         for alpn in self.dns_queries.iter().filter_map(|q| match q {
             DnsQuery::Completed {
                 response:
@@ -1062,6 +1077,16 @@ impl HappyEyeballs {
                 protocols.insert(protocol);
             }
         }
+
+        // Add protocols from alt-svc
+        for alt_svc in &self.network_config.alt_svc {
+            debug_assert!(
+                alt_svc.host.is_none() && alt_svc.port.is_none(),
+                "alt-svc with custom host/port not yet supported"
+            );
+            protocols.insert(alt_svc.protocol);
+        }
+
         if !self.network_config.http_versions.h3 {
             protocols.remove(&Protocol::H3);
         }
