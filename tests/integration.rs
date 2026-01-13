@@ -26,7 +26,10 @@ trait HappyEyeballsExt {
 impl HappyEyeballsExt for HappyEyeballs {
     fn expect(&mut self, input_output: Vec<(Option<Input>, Option<Output>)>, now: Instant) {
         for (input, expected_output) in input_output {
-            let output = self.process(input, now);
+            if let Some(input) = input {
+                self.process_input(input);
+            }
+            let output = self.process_output(now);
             assert_eq!(expected_output, output);
         }
     }
@@ -739,7 +742,7 @@ fn ipv6_blackhole() {
 
     for _ in 0..42 {
         now += CONNECTION_ATTEMPT_DELAY;
-        let connection_attempt = he.process(None, now).unwrap().attempt().unwrap();
+        let connection_attempt = he.process_output(now).unwrap().attempt().unwrap();
         if connection_attempt.address.is_ipv4() {
             return;
         }

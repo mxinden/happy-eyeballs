@@ -25,9 +25,8 @@
 //! let mut he = HappyEyeballs::new("example.com".into(), 443).unwrap();
 //!
 //! let mut now = Instant::now();
-//! let mut input = None;
 //! loop {
-//!     match he.process(input.take(), now) {
+//!     match he.process_output(now) {
 //!         None => break, // nothing more to do right now
 //!         Some(Output::SendDnsQuery { hostname, record_type }) => {
 //!             let response = match record_type {
@@ -56,13 +55,10 @@
 //!                     inner: DnsResultInner::A(Ok(vec![Ipv4Addr::new(192, 0, 2, 1)])),
 //!                 },
 //!             };
-//!             input = Some(Input::DnsResult(response));
+//!             he.process_input(Input::DnsResult(response));
 //!         }
 //!         Some(Output::AttemptConnection { endpoint }) => {
-//!             let _ = he.process(
-//!                 Some(Input::ConnectionResult { address: endpoint.address, result: Ok(()) }),
-//!                 now,
-//!             );
+//!             he.process_input(Input::ConnectionResult { address: endpoint.address, result: Ok(()) });
 //!             break;
 //!         }
 //!         Some(Output::CancelConnection(_addr)) => {}
@@ -640,30 +636,34 @@ impl HappyEyeballs {
         })
     }
 
-    // TODO: Does this ever return None given the timeouts?
-    /// Process an input event and return the corresponding output
+    /// Process an input event
     ///
-    /// Call with `None` to advance the state machine and get any pending outputs.
-    /// Call with `Some(input)` to provide external input (DNS results, timers, etc.).
+    /// Updates internal state based on the input.
     ///
-    /// The caller must call [`HappyEyeballs::process`] with input [`None`]
-    /// until it returns [`None`] or [`Output::Timer`].
-    #[instrument(skip_all, level = Level::TRACE, fields(target = %self.host), ret)]
-    pub fn process(&mut self, input: Option<Input>, now: Instant) -> Option<Output> {
+    /// After calling this, call [`HappyEyeballs::process_output`] to get any pending outputs.
+    #[instrument(skip_all, level = Level::TRACE, fields(target = %self.host))]
+    pub fn process_input(&mut self, input: Input) {
         trace!(input = ?input);
 
-        // Handle input.
-        let output = match input {
-            Some(Input::DnsResult(response)) => self.on_dns_response(response),
-            Some(Input::ConnectionResult { address, result }) => {
-                self.on_connection_result(address, result)
+        match input {
+            Input::DnsResult(response) => {
+                self.on_dns_response(response);
             }
-            _ => None,
-        };
-        if output.is_some() {
-            return output;
+            Input::ConnectionResult { address, result } => {
+                self.on_connection_result(address, result);
+            }
         }
+    }
 
+    // TODO: Does this ever return None given the timeouts?
+    /// Generate output based on current state
+    ///
+    /// Call this to advance the state machine and get any pending outputs.
+    ///
+    /// The caller must call [`HappyEyeballs::process_output`] repeatedly
+    /// until it returns [`None`] or [`Output::Timer`].
+    #[instrument(skip_all, level = Level::TRACE, fields(target = %self.host), ret)]
+    pub fn process_output(&mut self, now: Instant) -> Option<Output> {
         // Check if we have any successful connection that requires canceling other attempts
         let output = self.cancel_remaining_attempts();
         if output.is_some() {
@@ -836,7 +836,7 @@ impl HappyEyeballs {
         None
     }
 
-    fn on_dns_response(&mut self, response: DnsResult) -> Option<Output> {
+    fn on_dns_response(&mut self, response: DnsResult) {
         let Some(query) = self
             .dns_queries
             .iter_mut()
@@ -844,20 +844,18 @@ impl HappyEyeballs {
             .find(|q| q.record_type() == response.record_type())
         else {
             debug_assert!(false, "got {response:?} but never sent query");
-            return None;
+            return;
         };
 
         match &query {
             DnsQuery::InProgress { .. } => {}
             DnsQuery::Completed { response } => {
                 debug_assert!(false, "got {response:?} for already responded {query:?}");
-                return None;
+                return;
             }
         }
 
         *query = DnsQuery::Completed { response };
-
-        None
     }
 
     /// > When one connection attempt succeeds (generally when the TCP handshake
@@ -866,11 +864,7 @@ impl HappyEyeballs {
     /// > connection SHOULD be ignored.
     ///
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-6>
-    fn on_connection_result(
-        &mut self,
-        address: SocketAddr,
-        result: Result<(), String>,
-    ) -> Option<Output> {
+    fn on_connection_result(&mut self, address: SocketAddr, result: Result<(), String>) {
         // Find the connection attempt for this address
         let attempt = self
             .connection_attempts
@@ -882,7 +876,7 @@ impl HappyEyeballs {
                 false,
                 "got connection result for {address:?} but never attempted connection"
             );
-            return None;
+            return;
         };
 
         match result {
@@ -890,7 +884,6 @@ impl HappyEyeballs {
                 // Mark this connection as succeeded
                 attempt.state = ConnectionState::Succeeded;
                 // Cancellations will be issued by cancel_remaining_attempts()
-                None
             }
             Err(_error) => {
                 // Mark connection as failed
@@ -898,7 +891,6 @@ impl HappyEyeballs {
 
                 // The state machine will naturally attempt the next connection
                 // when process() is called again with None input
-                None
             }
         }
     }
