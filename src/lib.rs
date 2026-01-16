@@ -65,6 +65,7 @@
 //!         Some(Output::Timer { duration }) => {
 //!             now += duration;
 //!         }
+//!         Some(Output::Succeeded) => break,
 //!         Some(Output::Failed) => break,
 //!     }
 //! }
@@ -240,6 +241,9 @@ pub enum Output {
     // TODO: Consider a CancelSendDnsQuery.
     /// Cancel a connection attempt
     CancelConnection(SocketAddr),
+
+    /// Connection attempt succeeded
+    Succeeded,
 
     Failed,
 }
@@ -913,7 +917,8 @@ impl HappyEyeballs {
             return Some(Output::CancelConnection(address));
         }
 
-        None
+        // All connections have been canceled, return Succeeded
+        Some(Output::Succeeded)
     }
 
     /// > The client moves onto sorting addresses and establishing connections

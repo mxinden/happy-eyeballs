@@ -646,7 +646,7 @@ mod section_6_connection_attempts {
                         PORT,
                     ))),
                 ),
-                (None, None),
+                (None, Some(Output::Succeeded)),
             ],
             now,
         );
@@ -682,6 +682,61 @@ mod section_6_connection_attempts {
                 }),
                 Some(out_attempt_v4()),
             )],
+            now,
+        );
+    }
+
+    #[test]
+    fn successful_connection_emits_succeeded() {
+        let (now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                (
+                    Some(in_dns_https_positive_no_alpn()),
+                    Some(out_resolution_delay()),
+                ),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                (
+                    Some(Input::ConnectionResult {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        result: Ok(()),
+                    }),
+                    Some(Output::Succeeded),
+                ),
+            ],
+            now,
+        );
+    }
+
+    #[test]
+    fn succeeded_keeps_emitting_succeeded() {
+        let (now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                (
+                    Some(in_dns_https_positive_no_alpn()),
+                    Some(out_resolution_delay()),
+                ),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                (
+                    Some(Input::ConnectionResult {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        result: Ok(()),
+                    }),
+                    Some(Output::Succeeded),
+                ),
+                // After succeeded, continue to emit Succeeded
+                (None, Some(Output::Succeeded)),
+                (None, Some(Output::Succeeded)),
+            ],
             now,
         );
     }
