@@ -11,7 +11,6 @@ use happy_eyeballs::{
 };
 use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
 
-// TODO: Should crate treat "example.com" and "example.com." the same?
 const HOSTNAME: &str = "example.com";
 const PORT: u16 = 443;
 const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);

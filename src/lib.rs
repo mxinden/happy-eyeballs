@@ -457,9 +457,9 @@ pub struct AltSvc {
 
 // TODO: Allow user to provide alt-svc information from previous connections.
 //
-// TODO: We need to track whether HTTP RR DNS is enabled or disabled.
+// TODO: We need to track whether HTTP RR DNS is enabled or disabled. There is a pref for it in Firefox.
 //
-// TODO: We need to track whether ECH is enabled or disabled.
+// TODO: We need to track whether ECH is enabled or disabled. There is a pref for it in Firefox.
 //
 // TODO: Should we make HappyEyeballs proxy aware? E.g. should it know that the
 // proxy is resolving the domain? Should it still trigger an HTTP RR lookup to
