@@ -17,6 +17,7 @@ const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
 const V6_ADDR_2: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2);
 const V6_ADDR_3: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 3);
 const V4_ADDR: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);
+const ECH_CONFIG: &[u8] = &[1, 2, 3, 4, 5];
 
 trait HappyEyeballsExt {
     fn expect(&mut self, input_output: Vec<(Option<Input>, Option<Output>)>, now: Instant);
@@ -158,6 +159,7 @@ fn out_attempt_v6() -> Output {
         endpoint: Endpoint {
             address: SocketAddr::new(V6_ADDR.into(), PORT),
             protocol: ProtocolCombination::H2OrH1,
+            ech_config: None,
         },
     }
 }
@@ -167,6 +169,7 @@ fn out_attempt_v6_h3() -> Output {
         endpoint: Endpoint {
             address: SocketAddr::new(V6_ADDR.into(), PORT),
             protocol: ProtocolCombination::H3,
+            ech_config: None,
         },
     }
 }
@@ -176,6 +179,7 @@ fn out_attempt_v4() -> Output {
         endpoint: Endpoint {
             address: SocketAddr::new(V4_ADDR.into(), PORT),
             protocol: ProtocolCombination::H2OrH1,
+            ech_config: None,
         },
     }
 }
@@ -503,6 +507,7 @@ mod section_4_hostname_resolution {
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR_2.into(), PORT),
                         protocol: ProtocolCombination::H2OrH1,
+                        ech_config: None,
                     },
                 }),
             )],
@@ -618,6 +623,7 @@ mod section_6_connection_attempts {
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR_2.into(), PORT),
                         protocol: ProtocolCombination::H2OrH1,
+                        ech_config: None,
                     },
                 }),
             )],
@@ -836,6 +842,80 @@ fn alt_svc_construction() {
 
     // Should still send DNS queries as normal
     he.expect(vec![(None, Some(out_send_dns_https()))], now);
+}
+
+#[test]
+fn ech_config_propagated_to_endpoint() {
+    let (now, mut he) = setup();
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https())),
+            (None, Some(out_send_dns_aaaa())),
+            (None, Some(out_send_dns_a())),
+            (Some(in_dns_aaaa_negative()), Some(out_resolution_delay())),
+            (Some(in_dns_a_negative()), Some(out_resolution_delay())),
+            (
+                Some(Input::DnsResult(DnsResult {
+                    target_name: HOSTNAME.into(),
+                    inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+                        priority: 1,
+                        target_name: HOSTNAME.into(),
+                        alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+                        ipv6_hints: vec![V6_ADDR],
+                        ipv4_hints: vec![],
+                        ech_config: Some(ECH_CONFIG.to_vec()),
+                    }])),
+                })),
+                Some(Output::AttemptConnection {
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        protocol: ProtocolCombination::H3,
+                        ech_config: Some(ECH_CONFIG.to_vec()),
+                    },
+                }),
+            ),
+        ],
+        now,
+    );
+}
+
+#[test]
+fn ech_config_from_https_applies_to_aaaa() {
+    let (now, mut he) = setup();
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https())),
+            (None, Some(out_send_dns_aaaa())),
+            (None, Some(out_send_dns_a())),
+            (
+                Some(Input::DnsResult(DnsResult {
+                    target_name: HOSTNAME.into(),
+                    inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+                        priority: 1,
+                        target_name: HOSTNAME.into(),
+                        alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+                        ipv6_hints: vec![],
+                        ipv4_hints: vec![],
+                        ech_config: Some(ECH_CONFIG.to_vec()),
+                    }])),
+                })),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(in_dns_aaaa_positive()),
+                Some(Output::AttemptConnection {
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        protocol: ProtocolCombination::H3,
+                        ech_config: Some(ECH_CONFIG.to_vec()),
+                    },
+                }),
+            ),
+        ],
+        now,
+    );
 }
 
 #[test]

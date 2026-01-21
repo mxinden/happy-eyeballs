@@ -153,6 +153,7 @@ impl DnsResultInner {
         got_a: bool,
         got_aaaa: bool,
         protocols: HashSet<ProtocolCombination>,
+        ech_config: Option<Vec<u8>>,
     ) -> Vec<Endpoint> {
         match self {
             DnsResultInner::Https(infos) => infos
@@ -172,9 +173,12 @@ impl DnsResultInner {
                 .into_iter()
                 .flat_map(|addrs| {
                     addrs.iter().cloned().flat_map(|ip| {
+                        // TODO: way around allocation?
+                        let ech_config = ech_config.clone();
                         protocols.iter().map(move |p| Endpoint {
                             address: SocketAddr::new(IpAddr::V6(ip), port),
                             protocol: *p,
+                            ech_config: ech_config.clone(),
                         })
                     })
                 })
@@ -186,9 +190,12 @@ impl DnsResultInner {
                 .into_iter()
                 .flat_map(|addrs| {
                     addrs.iter().cloned().flat_map(|ip| {
+                        // TODO: way around allocation?
+                        let ech_config = ech_config.clone();
                         protocols.iter().map(move |p| Endpoint {
                             address: SocketAddr::new(IpAddr::V4(ip), port),
                             protocol: *p,
+                            ech_config: ech_config.clone(),
                         })
                     })
                 })
@@ -322,12 +329,15 @@ impl ServiceInfo {
                 IpAddr::V4(_) => !got_a,
             })
             .flat_map(|ip| {
+                // TODO: way around allocation?
+                let ech_config = self.ech_config.clone();
                 ProtocolCombination::from_protocols(&self.alpn_protocols)
                     .into_iter()
                     .map(move |protocol| Endpoint {
                         address: SocketAddr::new(ip, port),
                         // TODO: Only take the overlap with HappyEyeballs::protocols().
                         protocol,
+                        ech_config: ech_config.clone(),
                     })
             })
             .collect()
@@ -538,6 +548,7 @@ impl ConnectionAttempt {
 pub struct Endpoint {
     pub address: SocketAddr,
     pub protocol: ProtocolCombination,
+    pub ech_config: Option<Vec<u8>>,
 }
 
 impl Endpoint {
@@ -970,6 +981,7 @@ impl HappyEyeballs {
                 return Some(Endpoint {
                     address: SocketAddr::new(IpAddr::V4(ipv4_addr), self.port),
                     protocol: *protocols.iter().next()?,
+                    ech_config: None,
                 });
             }
             Host::Ipv6(ipv6_addr) => {
@@ -977,6 +989,7 @@ impl HappyEyeballs {
                 return Some(Endpoint {
                     address: SocketAddr::new(IpAddr::V6(ipv6_addr), self.port),
                     protocol: *protocols.iter().next()?,
+                    ech_config: None,
                 });
             }
             Host::Domain(_) => {}
@@ -994,6 +1007,7 @@ impl HappyEyeballs {
                     got_a,
                     got_aaaa,
                     self.connection_attempt_protocols(),
+                    self.ech_config(),
                 )
             })
             .filter(|endpoint| {
@@ -1120,6 +1134,35 @@ impl HappyEyeballs {
         }
 
         ProtocolCombination::from_protocols(&protocols)
+    }
+
+    /// Get the ECH config from HTTPS DNS records for the current host.
+    fn ech_config(&self) -> Option<Vec<u8>> {
+        let target_name: TargetName = match &self.host {
+            Host::Ipv4(_) | Host::Ipv6(_) => {
+                return None;
+            }
+            Host::Domain(domain) => domain.as_str(),
+        }
+        .into();
+
+        self.dns_queries
+            .iter()
+            .filter_map(|q| match q {
+                DnsQuery::Completed {
+                    response:
+                        DnsResult {
+                            inner: DnsResultInner::Https(Ok(infos)),
+                            ..
+                        },
+                // TODO: What about other target names?
+                } if *q.target_name() == target_name => {
+                    infos.iter().find_map(|info| info.ech_config.clone())
+                }
+                _ => None,
+            })
+            // TODO: What if there are multiple?
+            .next()
     }
 
     /// Whether to move on to the connection attempt phase based on the received
