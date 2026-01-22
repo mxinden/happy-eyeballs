@@ -1155,7 +1155,7 @@ impl HappyEyeballs {
                             inner: DnsResultInner::Https(Ok(infos)),
                             ..
                         },
-                // TODO: What about other target names?
+                    // TODO: What about other target names?
                 } if *q.target_name() == target_name => {
                     infos.iter().find_map(|info| info.ech_config.clone())
                 }
@@ -1168,20 +1168,12 @@ impl HappyEyeballs {
     /// Whether to move on to the connection attempt phase based on the received
     /// DNS responses, not based on a timeout.
     fn move_on_without_timeout(&mut self) -> bool {
-        if self.dns_queries.iter().any(|q| {
-            *q.target_name()
-                != match &self.host {
-                    Host::Domain(d) => d.as_str().into(),
-                    Host::Ipv4(_ipv4_addr) => todo!(),
-                    Host::Ipv6(_ipv6_addr) => todo!(),
-                }
-        }) {
-            debug_assert!(
-                false,
-                "function currently can't handle different target names"
-            );
-            return false;
-        }
+        let hostname = match self.host {
+            Host::Domain(ref d) => d.as_str(),
+            Host::Ipv4(_) | Host::Ipv6(_) => {
+                return false;
+            }
+        };
 
         // > Some positive (non-empty) address answers have been received AND
         //
@@ -1196,7 +1188,7 @@ impl HappyEyeballs {
 
                 _ => false,
             },
-            _ => false,
+            DnsQuery::InProgress { .. } => false,
         }) {
             return false;
         }
@@ -1220,6 +1212,7 @@ impl HappyEyeballs {
         if !self
             .dns_queries
             .iter()
+            .filter(|q| q.target_name().0 == hostname)
             .filter(|q| matches!(q, DnsQuery::Completed { .. }))
             .any(|q| q.record_type() == DnsRecordType::Https)
         {
@@ -1231,21 +1224,6 @@ impl HappyEyeballs {
 
     /// Whether to move on to the connection attempt phase based on a timeout.
     fn move_on_with_timeout(&mut self, now: Instant) -> bool {
-        if self.dns_queries.iter().any(|q| {
-            *q.target_name()
-                != match &self.host {
-                    Host::Domain(d) => d.as_str().into(),
-                    Host::Ipv4(_ipv4_addr) => todo!(),
-                    Host::Ipv6(_ipv6_addr) => todo!(),
-                }
-        }) {
-            debug_assert!(
-                false,
-                "function currently can't handle different target names"
-            );
-            return false;
-        }
-
         // > Or:
         // >
         // > - Some positive (non-empty) address answers have been received AND
@@ -1258,31 +1236,17 @@ impl HappyEyeballs {
             .iter()
             .filter_map(|q| q.get_response())
             .filter(|r| r.positive())
-            .filter(|r| matches!(r.record_type(), DnsRecordType::Aaaa | DnsRecordType::A))
-            .peekable();
-
-        if positive_responses.peek().is_none() {
+            .filter(|r| matches!(r.record_type(), DnsRecordType::Aaaa | DnsRecordType::A));
+        if positive_responses.next().is_none() {
             return false;
         }
 
-        let Some(https_query) = self
-            .dns_queries
+        self.dns_queries
             .iter()
-            .find(|q| q.record_type() == DnsRecordType::Https)
-        else {
-            return false;
-        };
-        match https_query {
-            DnsQuery::InProgress {
-                started,
-                target_name,
-                record_type,
-            } if now.duration_since(*started) >= RESOLUTION_DELAY => {}
-            _ => {
-                return false;
-            }
-        }
-
-        true
+            .filter_map(|q| match q {
+                DnsQuery::InProgress { started, .. } => Some(started),
+                DnsQuery::Completed { .. } => None,
+            })
+            .all(|started| now.duration_since(*started) >= RESOLUTION_DELAY)
     }
 }

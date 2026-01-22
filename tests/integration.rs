@@ -919,6 +919,28 @@ fn ech_config_from_https_applies_to_aaaa() {
 }
 
 #[test]
+fn multiple_target_names() {
+    let (now, mut he) = setup();
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https())),
+            (None, Some(out_send_dns_aaaa())),
+            (None, Some(out_send_dns_a())),
+            // HTTPS response with a different target name
+            (
+                Some(in_dns_https_positive_svc1()),
+                Some(out_send_dns_svc1()),
+            ),
+            // Now we have queries for both "example.com" and "svc1.example.com."
+            // Getting a positive AAAA for the main host
+            (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h3())),
+        ],
+        now,
+    );
+}
+
+#[test]
 fn alt_svc_used_immediately() {
     let now = Instant::now();
     let config = NetworkConfig {
