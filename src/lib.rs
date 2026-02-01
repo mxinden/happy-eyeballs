@@ -384,11 +384,13 @@ impl ProtocolCombination {
 #[derive(Debug, Clone, PartialEq)]
 enum DnsQuery {
     InProgress {
+        // TODO: Needed?
         started: Instant,
         target_name: TargetName,
         record_type: DnsRecordType,
     },
     Completed {
+        completed: Instant,
         response: DnsResult,
     },
 }
@@ -397,7 +399,10 @@ impl DnsQuery {
     fn record_type(&self) -> DnsRecordType {
         match self {
             DnsQuery::InProgress { record_type, .. } => *record_type,
-            DnsQuery::Completed { response } => match response.inner {
+            DnsQuery::Completed {
+                response,
+                completed: _,
+            } => match response.inner {
                 DnsResultInner::Https(_) => DnsRecordType::Https,
                 DnsResultInner::Aaaa(_) => DnsRecordType::Aaaa,
                 DnsResultInner::A(_) => DnsRecordType::A,
@@ -408,14 +413,20 @@ impl DnsQuery {
     fn target_name(&self) -> &TargetName {
         match self {
             DnsQuery::InProgress { target_name, .. } => target_name,
-            DnsQuery::Completed { response } => &response.target_name,
+            DnsQuery::Completed {
+                response,
+                completed: _,
+            } => &response.target_name,
         }
     }
 
     fn get_response(&self) -> Option<&DnsResult> {
         match self {
             DnsQuery::InProgress { .. } => None,
-            DnsQuery::Completed { response } => Some(response),
+            DnsQuery::Completed {
+                response,
+                completed: _,
+            } => Some(response),
         }
     }
 }
@@ -657,12 +668,12 @@ impl HappyEyeballs {
     ///
     /// After calling this, call [`HappyEyeballs::process_output`] to get any pending outputs.
     #[instrument(skip_all, level = Level::TRACE, fields(target = %self.host))]
-    pub fn process_input(&mut self, input: Input) {
+    pub fn process_input(&mut self, input: Input, now: Instant) {
         trace!(input = ?input);
 
         match input {
             Input::DnsResult(response) => {
-                self.on_dns_response(response);
+                self.on_dns_response(response, now);
             }
             Input::ConnectionResult { address, result } => {
                 self.on_connection_result(address, result);
@@ -721,34 +732,15 @@ impl HappyEyeballs {
         None
     }
 
+    // TODO: Rename to delay?
     fn timer(&self, now: Instant) -> Option<Output> {
-        // If we have a successful connection, no timers needed
+        // If we have a successful connection, no connection attempt delay
+        // needed.
         if self.has_successful_connection() {
             return None;
         }
 
-        let resolution_delay = self
-            .dns_queries
-            .iter()
-            .filter_map(|q| match q {
-                DnsQuery::InProgress {
-                    started,
-                    target_name: _,
-                    record_type: _,
-                } => Some(started),
-                _ => None,
-            })
-            .max()
-            .and_then(|started| {
-                let elapsed = now.duration_since(*started);
-                if elapsed < RESOLUTION_DELAY {
-                    Some(RESOLUTION_DELAY - elapsed)
-                } else {
-                    None
-                }
-            });
-
-        let connection_attempt_delay = self
+        if let Some(connection_attempt_delay) = self
             .connection_attempts
             .iter()
             .filter(|a| a.state == ConnectionState::InProgress)
@@ -761,15 +753,41 @@ impl HappyEyeballs {
                 } else {
                     None
                 }
+            })
+        {
+            return Some(Output::Timer {
+                duration: connection_attempt_delay,
             });
-
-        match (resolution_delay, connection_attempt_delay) {
-            (Some(rd), Some(cad)) => Some(rd.min(cad)),
-            (Some(rd), None) => Some(rd),
-            (None, Some(cad)) => Some(cad),
-            (None, None) => None,
         }
-        .map(|duration| Output::Timer { duration })
+
+        // If we have no in-progress DNS queries, no resolution delay needed.
+        if !self
+            .dns_queries
+            .iter()
+            .any(|q| matches!(q, DnsQuery::InProgress { .. }))
+        {
+            return None;
+        }
+
+        self.dns_queries
+            .iter()
+            .filter_map(|q| match q {
+                DnsQuery::Completed {
+                    completed,
+                    response: _,
+                } => Some(completed),
+                _ => None,
+            })
+            .min()
+            .and_then(|completed| {
+                let elapsed = now.duration_since(*completed);
+                if elapsed < RESOLUTION_DELAY {
+                    Some(RESOLUTION_DELAY - elapsed)
+                } else {
+                    None
+                }
+            })
+            .map(|duration| Output::Timer { duration })
     }
 
     fn send_dns_request(&mut self, now: Instant) -> Option<Output> {
@@ -816,6 +834,7 @@ impl HappyEyeballs {
             .iter()
             .filter_map(|q| match q {
                 DnsQuery::Completed {
+                    completed: _,
                     response:
                         DnsResult {
                             target_name: _,
@@ -853,7 +872,7 @@ impl HappyEyeballs {
         None
     }
 
-    fn on_dns_response(&mut self, response: DnsResult) {
+    fn on_dns_response(&mut self, response: DnsResult, now: Instant) {
         let Some(query) = self
             .dns_queries
             .iter_mut()
@@ -866,13 +885,19 @@ impl HappyEyeballs {
 
         match &query {
             DnsQuery::InProgress { .. } => {}
-            DnsQuery::Completed { response } => {
+            DnsQuery::Completed {
+                completed: _,
+                response,
+            } => {
                 debug_assert!(false, "got {response:?} for already responded {query:?}");
                 return;
             }
         }
 
-        *query = DnsQuery::Completed { response };
+        *query = DnsQuery::Completed {
+            completed: now,
+            response,
+        };
     }
 
     /// > When one connection attempt succeeds (generally when the TCP handshake
@@ -1038,6 +1063,7 @@ impl HappyEyeballs {
                 matches!(
                     q,
                     DnsQuery::Completed {
+                        completed: _,
                         response:
                             DnsResult {
                                 inner: DnsResultInner::Aaaa(Ok(addrs)),
@@ -1063,6 +1089,7 @@ impl HappyEyeballs {
                 matches!(
                     q,
                     DnsQuery::Completed {
+                        completed: _,
                         response:
                             DnsResult {
                                 inner: DnsResultInner::A(Ok(addrs)),
@@ -1098,6 +1125,7 @@ impl HappyEyeballs {
         // Add protocols from DNS HTTPS records
         for alpn in self.dns_queries.iter().filter_map(|q| match q {
             DnsQuery::Completed {
+                completed: _,
                 response:
                     DnsResult {
                         inner: DnsResultInner::Https(Ok(infos)),
@@ -1152,6 +1180,7 @@ impl HappyEyeballs {
             .iter()
             .filter_map(|q| match q {
                 DnsQuery::Completed {
+                    completed: _,
                     response:
                         DnsResult {
                             inner: DnsResultInner::Https(Ok(infos)),
@@ -1181,7 +1210,10 @@ impl HappyEyeballs {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
         if !self.dns_queries.iter().any(|q| match q {
-            DnsQuery::Completed { response } => match &response.inner {
+            DnsQuery::Completed {
+                completed: _,
+                response,
+            } => match &response.inner {
                 DnsResultInner::Aaaa(Ok(addrs)) => !addrs.is_empty(),
                 DnsResultInner::A(Ok(addrs)) => !addrs.is_empty(),
                 DnsResultInner::Https(Ok(infos)) => infos
