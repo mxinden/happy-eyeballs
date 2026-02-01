@@ -828,23 +828,25 @@ impl HappyEyeballs {
 
         for target_name in target_names {
             for record_type in [DnsRecordType::Aaaa, DnsRecordType::A] {
-                if !self
+                if self
                     .dns_queries
                     .iter()
                     .any(|q| q.target_name() == target_name && q.record_type() == record_type)
                 {
-                    let target_name = target_name.clone();
-
-                    self.dns_queries.push(DnsQuery::InProgress {
-                        started: now,
-                        target_name: target_name.clone(),
-                        record_type,
-                    });
-                    return Some(Output::SendDnsQuery {
-                        hostname: target_name,
-                        record_type,
-                    });
+                    continue;
                 }
+
+                let target_name = target_name.clone();
+
+                self.dns_queries.push(DnsQuery::InProgress {
+                    started: now,
+                    target_name: target_name.clone(),
+                    record_type,
+                });
+                return Some(Output::SendDnsQuery {
+                    hostname: target_name,
+                    record_type,
+                });
             }
         }
 
