@@ -27,7 +27,7 @@ impl HappyEyeballsExt for HappyEyeballs {
     fn expect(&mut self, input_output: Vec<(Option<Input>, Option<Output>)>, now: Instant) {
         for (input, expected_output) in input_output {
             if let Some(input) = input {
-                self.process_input(input);
+                self.process_input(input, now);
             }
             let output = self.process_output(now);
             assert_eq!(expected_output, output);
@@ -401,6 +401,31 @@ mod section_4_hostname_resolution {
                 (None, Some(out_send_dns_https())),
                 (None, Some(out_send_dns_aaaa())),
                 (None, Some(out_send_dns_a())),
+                (Some(in_dns_a_positive()), Some(out_resolution_delay())),
+            ],
+            now,
+        );
+
+        now += RESOLUTION_DELAY;
+
+        he.expect(vec![(None, Some(out_attempt_v4()))], now);
+    }
+
+    /// > Resolution Delay (Section 4): The time to wait for a AAAA record after
+    /// > receiving an A record. Recommended to be 50 milliseconds.
+    ///
+    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-9>
+    #[test]
+    fn resolution_delay_starts_after_other_response() {
+        let (mut now, mut he) = setup();
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                // No other response received yet.
+                (None, None),
                 (Some(in_dns_a_positive()), Some(out_resolution_delay())),
             ],
             now,
