@@ -714,7 +714,7 @@ impl HappyEyeballs {
             return output;
         }
 
-        let output = self.timer(now);
+        let output = self.delay(now);
         if output.is_some() {
             return output;
         }
@@ -733,7 +733,7 @@ impl HappyEyeballs {
     }
 
     // TODO: Rename to delay?
-    fn timer(&self, now: Instant) -> Option<Output> {
+    fn delay(&self, now: Instant) -> Option<Output> {
         // If we have a successful connection, no connection attempt delay
         // needed.
         if self.has_successful_connection() {
@@ -774,6 +774,7 @@ impl HappyEyeballs {
             .filter_map(|q| match q {
                 DnsQuery::Completed {
                     completed,
+                    // TODO: Currently considers all queries. Should we only consider A and AAAA?
                     response: _,
                 } => Some(completed),
                 _ => None,
