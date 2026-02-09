@@ -58,7 +58,7 @@
 //!             he.process_input(Input::DnsResult(response), now);
 //!         }
 //!         Some(Output::AttemptConnection { endpoint }) => {
-//!             he.process_input(Input::ConnectionResult { address: endpoint.address, result: Ok(()) }, now);
+//!             he.process_input(Input::ConnectionResult { endpoint, result: Ok(()) }, now);
 //!             break;
 //!         }
 //!         Some(Output::CancelConnection(_addr)) => {}
@@ -100,10 +100,13 @@ pub enum Input {
 
     /// Connection attempt result
     ConnectionResult {
-        address: SocketAddr,
+        endpoint: Endpoint,
         result: Result<(), String>,
         // TODO: When attempting a connection with ECH, the remote might send a
         // new ECH config to us on failure. That might be carried in this event?
+        //
+        // TODO: Needs to contain protocol. Otherwise can't differentiate a
+        // failed H3 and H2 connection to the same IP.
     },
 }
 
@@ -676,8 +679,8 @@ impl HappyEyeballs {
             Input::DnsResult(response) => {
                 self.on_dns_response(response, now);
             }
-            Input::ConnectionResult { address, result } => {
-                self.on_connection_result(address, result);
+            Input::ConnectionResult { endpoint, result } => {
+                self.on_connection_result(endpoint, result);
             }
         }
     }
@@ -908,20 +911,26 @@ impl HappyEyeballs {
     /// > connection SHOULD be ignored.
     ///
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-6>
-    fn on_connection_result(&mut self, address: SocketAddr, result: Result<(), String>) {
+    fn on_connection_result(&mut self, endpoint: Endpoint, result: Result<(), String>) {
         // Find the connection attempt for this address
         let attempt = self
             .connection_attempts
             .iter_mut()
-            .find(|attempt| attempt.endpoint.address == address);
+            .find(|attempt| attempt.endpoint == endpoint);
 
         let Some(attempt) = attempt else {
             debug_assert!(
                 false,
-                "got connection result for {address:?} but never attempted connection"
+                "got connection result for {endpoint:?} but never attempted connection"
             );
             return;
         };
+
+        debug_assert_eq!(
+            attempt.state,
+            ConnectionState::InProgress,
+            "got connection result for {endpoint:?} but attempt is not in progress"
+        );
 
         match result {
             Ok(()) => {
@@ -1121,8 +1130,7 @@ impl HappyEyeballs {
     }
 
     fn connection_attempt_protocols(&self) -> HashSet<ConnectionAttemptProtocols> {
-        // TODO: assuming h2. correct?
-        let mut protocols = HashSet::from([Protocol::H2, Protocol::H1]);
+        let mut protocols = HashSet::new();
 
         // Add protocols from DNS HTTPS records
         for alpn in self.dns_queries.iter().filter_map(|q| match q {
@@ -1144,6 +1152,12 @@ impl HappyEyeballs {
             for protocol in alpn {
                 protocols.insert(protocol);
             }
+        }
+
+        // If HTTPS DNS records didn't specify any protocols, default to HTTP/2, and HTTP/1.1.
+        if protocols.is_empty() {
+            protocols.insert(Protocol::H2);
+            protocols.insert(Protocol::H1);
         }
 
         // Add protocols from alt-svc

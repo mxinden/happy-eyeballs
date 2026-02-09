@@ -5,9 +5,9 @@ use std::{
 };
 
 use happy_eyeballs::{
-    AltSvc, CONNECTION_ATTEMPT_DELAY, DnsRecordType, DnsResult, DnsResultInner, Endpoint,
-    HappyEyeballs, HttpVersions, Input, IpPreference, NetworkConfig, Output, Protocol,
-    ConnectionAttemptProtocols, RESOLUTION_DELAY,
+    AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptProtocols, DnsRecordType, DnsResult,
+    DnsResultInner, Endpoint, HappyEyeballs, HttpVersions, Input, IpPreference, NetworkConfig,
+    Output, Protocol, RESOLUTION_DELAY,
 };
 use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
 
@@ -56,6 +56,20 @@ fn in_dns_https_positive_no_alpn() -> Input {
             priority: 1,
             target_name: HOSTNAME.into(),
             alpn_protocols: HashSet::new(),
+            ipv6_hints: vec![],
+            ipv4_hints: vec![],
+            ech_config: None,
+        }])),
+    })
+}
+
+fn in_dns_https_positive_h2_h3() -> Input {
+    Input::DnsResult(DnsResult {
+        target_name: HOSTNAME.into(),
+        inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+            priority: 1,
+            target_name: HOSTNAME.into(),
+            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
             ipv6_hints: vec![],
             ipv4_hints: vec![],
             ech_config: None,
@@ -126,6 +140,83 @@ fn in_dns_a_negative() -> Input {
     })
 }
 
+fn in_connection_result_v6_h1_h2_positive() -> Input {
+    Input::ConnectionResult {
+        endpoint: Endpoint {
+            address: SocketAddr::new(V6_ADDR.into(), PORT),
+            protocol: ConnectionAttemptProtocols::H2OrH1,
+            ech_config: None,
+        },
+        result: Ok(()),
+    }
+}
+
+fn in_connection_result_v6_h1_h2_negative() -> Input {
+    Input::ConnectionResult {
+        endpoint: Endpoint {
+            address: SocketAddr::new(V6_ADDR.into(), PORT),
+            protocol: ConnectionAttemptProtocols::H2OrH1,
+            ech_config: None,
+        },
+        result: Err("connection refused".to_string()),
+    }
+}
+
+fn in_connection_result_v6_h2_negative() -> Input {
+    Input::ConnectionResult {
+        endpoint: Endpoint {
+            address: SocketAddr::new(V6_ADDR.into(), PORT),
+            protocol: ConnectionAttemptProtocols::H2,
+            ech_config: None,
+        },
+        result: Err("connection refused".to_string()),
+    }
+}
+
+fn in_connection_result_v6_h3_negative() -> Input {
+    Input::ConnectionResult {
+        endpoint: Endpoint {
+            address: SocketAddr::new(V6_ADDR.into(), PORT),
+            protocol: ConnectionAttemptProtocols::H3,
+            ech_config: None,
+        },
+        result: Err("connection refused".to_string()),
+    }
+}
+
+fn in_connection_result_v4_h1_h2_negative() -> Input {
+    Input::ConnectionResult {
+        endpoint: Endpoint {
+            address: SocketAddr::new(V4_ADDR.into(), PORT),
+            protocol: ConnectionAttemptProtocols::H2OrH1,
+            ech_config: None,
+        },
+        result: Err("connection refused".to_string()),
+    }
+}
+
+fn in_connection_result_v4_h2_negative() -> Input {
+    Input::ConnectionResult {
+        endpoint: Endpoint {
+            address: SocketAddr::new(V4_ADDR.into(), PORT),
+            protocol: ConnectionAttemptProtocols::H2,
+            ech_config: None,
+        },
+        result: Err("connection refused".to_string()),
+    }
+}
+
+fn in_connection_result_v4_h3_negative() -> Input {
+    Input::ConnectionResult {
+        endpoint: Endpoint {
+            address: SocketAddr::new(V4_ADDR.into(), PORT),
+            protocol: ConnectionAttemptProtocols::H3,
+            ech_config: None,
+        },
+        result: Err("connection refused".to_string()),
+    }
+}
+
 fn out_send_dns_https() -> Output {
     Output::SendDnsQuery {
         hostname: HOSTNAME.into(),
@@ -154,11 +245,21 @@ fn out_send_dns_a() -> Output {
     }
 }
 
-fn out_attempt_v6() -> Output {
+fn out_attempt_v6_h1_h2() -> Output {
     Output::AttemptConnection {
         endpoint: Endpoint {
             address: SocketAddr::new(V6_ADDR.into(), PORT),
             protocol: ConnectionAttemptProtocols::H2OrH1,
+            ech_config: None,
+        },
+    }
+}
+
+fn out_attempt_v6_h2() -> Output {
+    Output::AttemptConnection {
+        endpoint: Endpoint {
+            address: SocketAddr::new(V6_ADDR.into(), PORT),
+            protocol: ConnectionAttemptProtocols::H2,
             ech_config: None,
         },
     }
@@ -174,11 +275,31 @@ fn out_attempt_v6_h3() -> Output {
     }
 }
 
-fn out_attempt_v4() -> Output {
+fn out_attempt_v4_h1_h2() -> Output {
     Output::AttemptConnection {
         endpoint: Endpoint {
             address: SocketAddr::new(V4_ADDR.into(), PORT),
             protocol: ConnectionAttemptProtocols::H2OrH1,
+            ech_config: None,
+        },
+    }
+}
+
+fn out_attempt_v4_h2() -> Output {
+    Output::AttemptConnection {
+        endpoint: Endpoint {
+            address: SocketAddr::new(V4_ADDR.into(), PORT),
+            protocol: ConnectionAttemptProtocols::H2,
+            ech_config: None,
+        },
+    }
+}
+
+fn out_attempt_v4_h3() -> Output {
+    Output::AttemptConnection {
+        endpoint: Endpoint {
+            address: SocketAddr::new(V4_ADDR.into(), PORT),
+            protocol: ConnectionAttemptProtocols::H3,
             ech_config: None,
         },
     }
@@ -304,7 +425,7 @@ mod section_4_hostname_resolution {
                 },
                 positive: in_dns_aaaa_positive(),
                 preferred: None,
-                expected: Some(out_attempt_v6()),
+                expected: Some(out_attempt_v6_h1_h2()),
             },
             // V6 preferred, V4 positive, V6 positive, HTTPS positive, expect V6 connection attempt
             Case {
@@ -315,7 +436,7 @@ mod section_4_hostname_resolution {
                 },
                 positive: in_dns_a_positive(),
                 preferred: Some(in_dns_aaaa_positive()),
-                expected: Some(out_attempt_v6()),
+                expected: Some(out_attempt_v6_h1_h2()),
             },
             // V6 preferred, V6 negative, V4 positive, HTTPS positive, expect V4 connection attempt
             Case {
@@ -326,7 +447,7 @@ mod section_4_hostname_resolution {
                 },
                 positive: in_dns_a_positive(),
                 preferred: Some(in_dns_aaaa_negative()),
-                expected: Some(out_attempt_v4()),
+                expected: Some(out_attempt_v4_h1_h2()),
             },
             // V4 preferred, V4 positive, HTTPS positive, expect V4 connection attempt
             Case {
@@ -337,7 +458,7 @@ mod section_4_hostname_resolution {
                 },
                 positive: in_dns_a_positive(),
                 preferred: None,
-                expected: Some(out_attempt_v4()),
+                expected: Some(out_attempt_v4_h1_h2()),
             },
             // V4 preferred, V6 positive, V4 positive, HTTPS positive, expect V4 connection attempt
             Case {
@@ -348,7 +469,7 @@ mod section_4_hostname_resolution {
                 },
                 positive: in_dns_aaaa_positive(),
                 preferred: Some(in_dns_a_positive()),
-                expected: Some(out_attempt_v4()),
+                expected: Some(out_attempt_v4_h1_h2()),
             },
             // V4 preferred, V4 negative, V6 positive, HTTPS positive, expect V6 connection attempt
             Case {
@@ -359,7 +480,7 @@ mod section_4_hostname_resolution {
                 },
                 positive: in_dns_aaaa_positive(),
                 preferred: Some(in_dns_a_negative()),
-                expected: Some(out_attempt_v6()),
+                expected: Some(out_attempt_v6_h1_h2()),
             },
         ];
 
@@ -408,7 +529,7 @@ mod section_4_hostname_resolution {
 
         now += RESOLUTION_DELAY;
 
-        he.expect(vec![(None, Some(out_attempt_v4()))], now);
+        he.expect(vec![(None, Some(out_attempt_v4_h1_h2()))], now);
     }
 
     /// > Resolution Delay (Section 4): The time to wait for a AAAA record after
@@ -433,7 +554,7 @@ mod section_4_hostname_resolution {
 
         now += RESOLUTION_DELAY;
 
-        he.expect(vec![(None, Some(out_attempt_v4()))], now);
+        he.expect(vec![(None, Some(out_attempt_v4_h1_h2()))], now);
     }
 
     /// > ServiceMode records can contain address hints via ipv6hint and
@@ -517,7 +638,7 @@ mod section_4_hostname_resolution {
                         target_name: HOSTNAME.into(),
                         inner: DnsResultInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2, V6_ADDR_3])),
                     })),
-                    Some(out_attempt_v6()),
+                    Some(out_attempt_v6_h1_h2()),
                 ),
             ],
             now,
@@ -577,7 +698,7 @@ mod section_6_connection_attempts {
                     Some(in_dns_https_positive_no_alpn()),
                     Some(out_resolution_delay()),
                 ),
-                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h1_h2())),
                 (
                     Some(in_dns_a_positive()),
                     Some(out_connection_attempt_delay()),
@@ -588,7 +709,7 @@ mod section_6_connection_attempts {
 
         now += CONNECTION_ATTEMPT_DELAY;
 
-        he.expect(vec![(None, Some(out_attempt_v4()))], now);
+        he.expect(vec![(None, Some(out_attempt_v4_h1_h2()))], now);
     }
 
     #[test]
@@ -602,7 +723,7 @@ mod section_6_connection_attempts {
                 (None, Some(out_send_dns_a())),
                 (Some(in_dns_https_negative()), Some(out_resolution_delay())),
                 (Some(in_dns_a_negative()), Some(out_resolution_delay())),
-                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h1_h2())),
             ],
             now,
         );
@@ -630,7 +751,7 @@ mod section_6_connection_attempts {
                         target_name: HOSTNAME.into(),
                         inner: DnsResultInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2])),
                     })),
-                    Some(out_attempt_v6()),
+                    Some(out_attempt_v6_h1_h2()),
                 ),
                 (
                     Some(in_dns_a_positive()),
@@ -656,14 +777,11 @@ mod section_6_connection_attempts {
         );
 
         now += CONNECTION_ATTEMPT_DELAY;
-        he.expect(vec![(None, Some(out_attempt_v4()))], now);
+        he.expect(vec![(None, Some(out_attempt_v4_h1_h2()))], now);
         he.expect(
             vec![
                 (
-                    Some(Input::ConnectionResult {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        result: Ok(()),
-                    }),
+                    Some(in_connection_result_v6_h1_h2_positive()),
                     Some(Output::CancelConnection(SocketAddr::new(
                         V6_ADDR_2.into(),
                         PORT,
@@ -695,7 +813,7 @@ mod section_6_connection_attempts {
                     Some(in_dns_https_positive_no_alpn()),
                     Some(out_resolution_delay()),
                 ),
-                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h1_h2())),
                 (
                     Some(in_dns_a_positive()),
                     Some(out_connection_attempt_delay()),
@@ -706,11 +824,8 @@ mod section_6_connection_attempts {
 
         he.expect(
             vec![(
-                Some(Input::ConnectionResult {
-                    address: SocketAddr::new(V6_ADDR.into(), PORT),
-                    result: Err("connection refused".to_string()),
-                }),
-                Some(out_attempt_v4()),
+                Some(in_connection_result_v6_h1_h2_negative()),
+                Some(out_attempt_v4_h1_h2()),
             )],
             now,
         );
@@ -729,12 +844,9 @@ mod section_6_connection_attempts {
                     Some(in_dns_https_positive_no_alpn()),
                     Some(out_resolution_delay()),
                 ),
-                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h1_h2())),
                 (
-                    Some(Input::ConnectionResult {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        result: Ok(()),
-                    }),
+                    Some(in_connection_result_v6_h1_h2_positive()),
                     Some(Output::Succeeded),
                 ),
             ],
@@ -755,12 +867,9 @@ mod section_6_connection_attempts {
                     Some(in_dns_https_positive_no_alpn()),
                     Some(out_resolution_delay()),
                 ),
-                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h1_h2())),
                 (
-                    Some(Input::ConnectionResult {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        result: Ok(()),
-                    }),
+                    Some(in_connection_result_v6_h1_h2_positive()),
                     Some(Output::Succeeded),
                 ),
                 // After succeeded, continue to emit Succeeded
@@ -784,23 +893,17 @@ mod section_6_connection_attempts {
                     Some(in_dns_https_positive_no_alpn()),
                     Some(out_resolution_delay()),
                 ),
-                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6())),
+                (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h1_h2())),
                 (
                     Some(in_dns_a_positive()),
                     Some(out_connection_attempt_delay()),
                 ),
                 (
-                    Some(Input::ConnectionResult {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        result: Err("connection refused".to_string()),
-                    }),
-                    Some(out_attempt_v4()),
+                    Some(in_connection_result_v6_h1_h2_negative()),
+                    Some(out_attempt_v4_h1_h2()),
                 ),
                 (
-                    Some(Input::ConnectionResult {
-                        address: SocketAddr::new(V4_ADDR.into(), PORT),
-                        result: Err("connection refused".to_string()),
-                    }),
+                    Some(in_connection_result_v4_h1_h2_negative()),
                     Some(Output::Failed),
                 ),
             ],
@@ -841,7 +944,7 @@ fn ip_host() {
     let now = Instant::now();
     let mut he = HappyEyeballs::new("[2001:0DB8::1]", PORT).unwrap();
 
-    he.expect(vec![(None, Some(out_attempt_v6()))], now);
+    he.expect(vec![(None, Some(out_attempt_v6_h1_h2()))], now);
 }
 
 #[test]
@@ -988,6 +1091,48 @@ fn alt_svc_used_immediately() {
             (Some(in_dns_https_negative()), Some(out_resolution_delay())),
             // Alt-svc provided H3, so we should attempt H3 connection
             (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h3())),
+        ],
+        now,
+    );
+}
+
+/// Website with HTTPS record with `noDefaultAlpn` set.
+///
+/// See e.g. <adamwoodland.com>.
+#[test]
+fn no_default_alpn() {
+    let (now, mut he) = setup();
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https())),
+            (None, Some(out_send_dns_aaaa())),
+            (None, Some(out_send_dns_a())),
+            (
+                Some(in_dns_https_positive_h2_h3()),
+                Some(out_resolution_delay()),
+            ),
+            (Some(in_dns_aaaa_positive()), Some(out_attempt_v6_h3())),
+            (
+                Some(in_dns_a_positive()),
+                Some(out_connection_attempt_delay()),
+            ),
+            (
+                Some(in_connection_result_v6_h3_negative()),
+                Some(out_attempt_v4_h3()),
+            ),
+            (
+                Some(in_connection_result_v4_h3_negative()),
+                Some(out_attempt_v6_h2()),
+            ),
+            (
+                Some(in_connection_result_v6_h2_negative()),
+                Some(out_attempt_v4_h2()),
+            ),
+            (
+                Some(in_connection_result_v4_h2_negative()),
+                Some(Output::Failed),
+            ),
         ],
         now,
     );
