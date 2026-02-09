@@ -348,6 +348,8 @@ fn initial_state() {
 /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4>
 #[cfg(test)]
 mod section_4_hostname_resolution {
+    use std::time::Duration;
+
     use super::*;
 
     /// > All of the DNS queries SHOULD be made as soon after one another as
@@ -555,6 +557,43 @@ mod section_4_hostname_resolution {
         now += RESOLUTION_DELAY;
 
         he.expect(vec![(None, Some(out_attempt_v4_h1_h2()))], now);
+    }
+
+    /// Start of the Resolution Delay is not the first DNS query is sent, but
+    /// the first response received.
+    ///
+    /// > A resolution time delay has passed after which other answers have not been received
+    ///
+    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
+    #[test]
+    fn resolution_delay_starts_on_first_response() {
+        let (mut now, mut he) = setup();
+        let start = now;
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https())),
+                (None, Some(out_send_dns_aaaa())),
+                (None, Some(out_send_dns_a())),
+                // No other response received yet.
+                (None, None),
+            ],
+            now,
+        );
+
+        now += Duration::from_millis(10);
+
+        he.expect(
+            vec![(Some(in_dns_a_positive()), Some(out_resolution_delay()))],
+            start + Duration::from_millis(10),
+        );
+
+        he.expect(vec![(None, None)], start + RESOLUTION_DELAY);
+
+        he.expect(
+            vec![(None, Some(out_attempt_v4_h1_h2()))],
+            start + Duration::from_millis(10) + RESOLUTION_DELAY,
+        );
     }
 
     /// > ServiceMode records can contain address hints via ipv6hint and

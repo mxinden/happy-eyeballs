@@ -104,9 +104,6 @@ pub enum Input {
         result: Result<(), String>,
         // TODO: When attempting a connection with ECH, the remote might send a
         // new ECH config to us on failure. That might be carried in this event?
-        //
-        // TODO: Needs to contain protocol. Otherwise can't differentiate a
-        // failed H3 and H2 connection to the same IP.
     },
 }
 
