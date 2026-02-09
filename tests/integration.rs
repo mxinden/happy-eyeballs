@@ -567,8 +567,8 @@ mod section_4_hostname_resolution {
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
     #[test]
     fn resolution_delay_starts_on_first_response() {
-        let (mut now, mut he) = setup();
-        let start = now;
+        const RESPONSE_DELAY: Duration = Duration::from_millis(10);
+        let (start, mut he) = setup();
 
         he.expect(
             vec![
@@ -578,21 +578,29 @@ mod section_4_hostname_resolution {
                 // No other response received yet.
                 (None, None),
             ],
-            now,
+            start,
         );
 
-        now += Duration::from_millis(10);
-
+        // Receive first response, thus activating the resolution delay.
         he.expect(
             vec![(Some(in_dns_a_positive()), Some(out_resolution_delay()))],
-            start + Duration::from_millis(10),
+            start + RESPONSE_DELAY,
         );
 
-        he.expect(vec![(None, None)], start + RESOLUTION_DELAY);
+        // Resolution delay is off of the response, not the query start (i.e. `start`).
+        he.expect(
+            vec![(
+                None,
+                Some(Output::Timer {
+                    duration: RESPONSE_DELAY,
+                }),
+            )],
+            start + RESOLUTION_DELAY,
+        );
 
         he.expect(
             vec![(None, Some(out_attempt_v4_h1_h2()))],
-            start + Duration::from_millis(10) + RESOLUTION_DELAY,
+            start + RESPONSE_DELAY + RESOLUTION_DELAY,
         );
     }
 

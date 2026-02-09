@@ -385,8 +385,6 @@ impl ConnectionAttemptProtocols {
 #[derive(Debug, Clone, PartialEq)]
 enum DnsQuery {
     InProgress {
-        // TODO: Needed?
-        started: Instant,
         target_name: TargetName,
         record_type: DnsRecordType,
     },
@@ -699,7 +697,7 @@ impl HappyEyeballs {
 
         // TODO: Move below self.connection_attempt()?
         // Send DNS queries.
-        let output = self.send_dns_request(now);
+        let output = self.send_dns_request();
         if output.is_some() {
             return output;
         }
@@ -710,7 +708,7 @@ impl HappyEyeballs {
             return output;
         }
 
-        let output = self.send_dns_request_for_target_name(now);
+        let output = self.send_dns_request_for_target_name();
         if output.is_some() {
             return output;
         }
@@ -792,7 +790,7 @@ impl HappyEyeballs {
             .map(|duration| Output::Timer { duration })
     }
 
-    fn send_dns_request(&mut self, now: Instant) -> Option<Output> {
+    fn send_dns_request(&mut self) -> Option<Output> {
         let target_name: TargetName = match &self.host {
             Host::Ipv4(_) | Host::Ipv6(_) => {
                 // No DNS queries needed for IP hosts.
@@ -810,7 +808,6 @@ impl HappyEyeballs {
                 .any(|q| q.record_type() == record_type)
             {
                 self.dns_queries.push(DnsQuery::InProgress {
-                    started: now,
                     target_name: target_name.clone(),
                     record_type,
                 });
@@ -829,7 +826,7 @@ impl HappyEyeballs {
     /// > for those TargetNames if they haven't yet received those records.
     ///
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
-    fn send_dns_request_for_target_name(&mut self, now: Instant) -> Option<Output> {
+    fn send_dns_request_for_target_name(&mut self) -> Option<Output> {
         // Check if we have HTTPS response with ServiceInfo
         let target_names = self
             .dns_queries
@@ -860,7 +857,6 @@ impl HappyEyeballs {
                 let target_name = target_name.clone();
 
                 self.dns_queries.push(DnsQuery::InProgress {
-                    started: now,
                     target_name: target_name.clone(),
                     record_type,
                 });
@@ -1291,9 +1287,9 @@ impl HappyEyeballs {
         self.dns_queries
             .iter()
             .filter_map(|q| match q {
-                DnsQuery::InProgress { started, .. } => Some(started),
-                DnsQuery::Completed { .. } => None,
+                DnsQuery::InProgress { .. } => None,
+                DnsQuery::Completed { completed, .. } => Some(completed),
             })
-            .all(|started| now.duration_since(*started) >= RESOLUTION_DELAY)
+            .any(|completed| now.duration_since(*completed) >= RESOLUTION_DELAY)
     }
 }
