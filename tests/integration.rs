@@ -7,7 +7,7 @@ use std::{
 use happy_eyeballs::{
     AltSvc, CONNECTION_ATTEMPT_DELAY, DnsRecordType, DnsResult, DnsResultInner, Endpoint,
     HappyEyeballs, HttpVersions, Input, IpPreference, NetworkConfig, Output, Protocol,
-    ProtocolCombination, RESOLUTION_DELAY,
+    ConnectionAttemptProtocols, RESOLUTION_DELAY,
 };
 use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
 
@@ -158,7 +158,7 @@ fn out_attempt_v6() -> Output {
     Output::AttemptConnection {
         endpoint: Endpoint {
             address: SocketAddr::new(V6_ADDR.into(), PORT),
-            protocol: ProtocolCombination::H2OrH1,
+            protocol: ConnectionAttemptProtocols::H2OrH1,
             ech_config: None,
         },
     }
@@ -168,7 +168,7 @@ fn out_attempt_v6_h3() -> Output {
     Output::AttemptConnection {
         endpoint: Endpoint {
             address: SocketAddr::new(V6_ADDR.into(), PORT),
-            protocol: ProtocolCombination::H3,
+            protocol: ConnectionAttemptProtocols::H3,
             ech_config: None,
         },
     }
@@ -178,7 +178,7 @@ fn out_attempt_v4() -> Output {
     Output::AttemptConnection {
         endpoint: Endpoint {
             address: SocketAddr::new(V4_ADDR.into(), PORT),
-            protocol: ProtocolCombination::H2OrH1,
+            protocol: ConnectionAttemptProtocols::H2OrH1,
             ech_config: None,
         },
     }
@@ -531,7 +531,7 @@ mod section_4_hostname_resolution {
                 Some(Output::AttemptConnection {
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR_2.into(), PORT),
-                        protocol: ProtocolCombination::H2OrH1,
+                        protocol: ConnectionAttemptProtocols::H2OrH1,
                         ech_config: None,
                     },
                 }),
@@ -647,7 +647,7 @@ mod section_6_connection_attempts {
                 Some(Output::AttemptConnection {
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR_2.into(), PORT),
-                        protocol: ProtocolCombination::H2OrH1,
+                        protocol: ConnectionAttemptProtocols::H2OrH1,
                         ech_config: None,
                     },
                 }),
@@ -895,7 +895,7 @@ fn ech_config_propagated_to_endpoint() {
                 Some(Output::AttemptConnection {
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol: ProtocolCombination::H3,
+                        protocol: ConnectionAttemptProtocols::H3,
                         ech_config: Some(ECH_CONFIG.to_vec()),
                     },
                 }),
@@ -933,7 +933,7 @@ fn ech_config_from_https_applies_to_aaaa() {
                 Some(Output::AttemptConnection {
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol: ProtocolCombination::H3,
+                        protocol: ConnectionAttemptProtocols::H3,
                         ech_config: Some(ECH_CONFIG.to_vec()),
                     },
                 }),

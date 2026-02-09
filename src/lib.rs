@@ -55,10 +55,10 @@
 //!                     inner: DnsResultInner::A(Ok(vec![Ipv4Addr::new(192, 0, 2, 1)])),
 //!                 },
 //!             };
-//!             he.process_input(Input::DnsResult(response));
+//!             he.process_input(Input::DnsResult(response), now);
 //!         }
 //!         Some(Output::AttemptConnection { endpoint }) => {
-//!             he.process_input(Input::ConnectionResult { address: endpoint.address, result: Ok(()) });
+//!             he.process_input(Input::ConnectionResult { address: endpoint.address, result: Ok(()) }, now);
 //!             break;
 //!         }
 //!         Some(Output::CancelConnection(_addr)) => {}
@@ -152,7 +152,7 @@ impl DnsResultInner {
         port: u16,
         got_a: bool,
         got_aaaa: bool,
-        protocols: HashSet<ProtocolCombination>,
+        protocols: HashSet<ConnectionAttemptProtocols>,
         ech_config: Option<Vec<u8>>,
     ) -> Vec<Endpoint> {
         match self {
@@ -331,7 +331,7 @@ impl ServiceInfo {
             .flat_map(|ip| {
                 // TODO: way around allocation?
                 let ech_config = self.ech_config.clone();
-                ProtocolCombination::from_protocols(&self.alpn_protocols)
+                ConnectionAttemptProtocols::from_protocols(&self.alpn_protocols)
                     .into_iter()
                     .map(move |protocol| Endpoint {
                         address: SocketAddr::new(ip, port),
@@ -353,29 +353,30 @@ pub enum Protocol {
 
 /// Possible connection attempt protocol combinations.
 ///
-/// While on a QUIC connection one can only use HTTP/3, on a TCP connection one
-/// might either negotiate HTTP/2 or HTTP/1.1 via TLS ALPN.
+/// While on a QUIC connection attempts one can only use HTTP/3, on a TCP
+/// connection attempt one might either negotiate HTTP/2 or HTTP/1.1 via TLS
+/// ALPN.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ProtocolCombination {
+pub enum ConnectionAttemptProtocols {
     H3,
     H2OrH1,
     H2,
     H1,
 }
 
-impl ProtocolCombination {
-    /// [`Protocol::H2`] and [`Protocol::H1`] into [`ProtocolCombination::H2OrH1`].
-    fn from_protocols(protocols: &HashSet<Protocol>) -> HashSet<ProtocolCombination> {
+impl ConnectionAttemptProtocols {
+    /// [`Protocol::H2`] and [`Protocol::H1`] into [`ConnectionAttemptProtocols::H2OrH1`].
+    fn from_protocols(protocols: &HashSet<Protocol>) -> HashSet<ConnectionAttemptProtocols> {
         let mut combinations = HashSet::new();
         if protocols.contains(&Protocol::H3) {
-            combinations.insert(ProtocolCombination::H3);
+            combinations.insert(ConnectionAttemptProtocols::H3);
         }
         if protocols.contains(&Protocol::H2) && protocols.contains(&Protocol::H1) {
-            combinations.insert(ProtocolCombination::H2OrH1);
+            combinations.insert(ConnectionAttemptProtocols::H2OrH1);
         } else if protocols.contains(&Protocol::H2) {
-            combinations.insert(ProtocolCombination::H2);
+            combinations.insert(ConnectionAttemptProtocols::H2);
         } else if protocols.contains(&Protocol::H1) {
-            combinations.insert(ProtocolCombination::H1);
+            combinations.insert(ConnectionAttemptProtocols::H1);
         }
         combinations
     }
@@ -558,7 +559,7 @@ impl ConnectionAttempt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
     pub address: SocketAddr,
-    pub protocol: ProtocolCombination,
+    pub protocol: ConnectionAttemptProtocols,
     pub ech_config: Option<Vec<u8>>,
 }
 
@@ -1119,7 +1120,7 @@ impl HappyEyeballs {
             .any(|a| a.state == ConnectionState::InProgress)
     }
 
-    fn connection_attempt_protocols(&self) -> HashSet<ProtocolCombination> {
+    fn connection_attempt_protocols(&self) -> HashSet<ConnectionAttemptProtocols> {
         // TODO: assuming h2. correct?
         let mut protocols = HashSet::from([Protocol::H2, Protocol::H1]);
 
@@ -1164,7 +1165,7 @@ impl HappyEyeballs {
             protocols.remove(&Protocol::H1);
         }
 
-        ProtocolCombination::from_protocols(&protocols)
+        ConnectionAttemptProtocols::from_protocols(&protocols)
     }
 
     /// Get the ECH config from HTTPS DNS records for the current host.
