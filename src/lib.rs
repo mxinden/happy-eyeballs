@@ -13,63 +13,36 @@
 //!
 //! ```rust
 //! # use happy_eyeballs::{
-//! #     DnsRecordType, DnsResult, DnsResultInner, HappyEyeballs, Input, NetworkConfig,
-//! #     HttpVersions, IpPreference, Output, Protocol, ServiceInfo, TargetName,
+//! #     DnsRecordType, DnsResult, DnsResultInner, HappyEyeballs, Input, Output, TargetName,
 //! # };
-//! # use std::{
-//! #     collections::HashSet,
-//! #     net::{Ipv4Addr, Ipv6Addr},
-//! #     time::Instant,
-//! # };
+//! # use std::{net::{Ipv4Addr, Ipv6Addr}, time::Instant};
 //!
-//! let mut he = HappyEyeballs::new("example.com".into(), 443).unwrap();
+//! let mut he = HappyEyeballs::new("example.com", 443).unwrap();
+//! let now = Instant::now();
 //!
-//! let mut now = Instant::now();
-//! loop {
-//!     match he.process_output(now) {
-//!         None => break, // nothing more to do right now
-//!         Some(Output::SendDnsQuery { hostname, record_type }) => {
-//!             let response = match record_type {
-//!                 DnsRecordType::Https => {
-//!                     let mut alpn = HashSet::new();
-//!                     alpn.insert(Protocol::H3);
-//!                     alpn.insert(Protocol::H2);
-//!                     DnsResult {
-//!                         target_name: hostname.clone(),
-//!                         inner: DnsResultInner::Https(Ok(vec![ServiceInfo {
-//!                             priority: 1,
-//!                             target_name: TargetName::from("example.com"),
-//!                             alpn_protocols: alpn,
-//!                             ech_config: None,
-//!                             ipv4_hints: vec![Ipv4Addr::new(192, 0, 2, 1)],
-//!                             ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)],
-//!                         }])),
-//!                     }
-//!                 }
-//!                 DnsRecordType::Aaaa => DnsResult {
-//!                     target_name: hostname.clone(),
-//!                     inner: DnsResultInner::Aaaa(Ok(vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)])),
-//!                 },
-//!                 DnsRecordType::A => DnsResult {
-//!                     target_name: hostname.clone(),
-//!                     inner: DnsResultInner::A(Ok(vec![Ipv4Addr::new(192, 0, 2, 1)])),
-//!                 },
-//!             };
-//!             he.process_input(Input::DnsResult(response), now);
+//! // First process outputs from the state machine, e.g. a DNS query to send:
+//! while let Some(output) = he.process_output(now) {
+//!     match output {
+//!         Output::SendDnsQuery { hostname, record_type } => {
+//!             // Send DNS query.
 //!         }
-//!         Some(Output::AttemptConnection { endpoint }) => {
-//!             he.process_input(Input::ConnectionResult { endpoint, result: Ok(()) }, now);
-//!             break;
+//!         Output::AttemptConnection { endpoint } => {
+//!             // Attempt connection.
 //!         }
-//!         Some(Output::CancelConnection(_addr)) => {}
-//!         Some(Output::Timer { duration }) => {
-//!             now += duration;
-//!         }
-//!         Some(Output::Succeeded) => break,
-//!         Some(Output::Failed) => break,
+//!         _ => {}
 //!     }
 //! }
+//!
+//! // Later pass results as input back to the state machine, e.g. a DNS
+//! // response arrives:
+//! # let dns_result = DnsResult {
+//! #     target_name: TargetName::from("example.com"),
+//! #     inner: DnsResultInner::Aaaa(Ok(vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)])),
+//! # };
+//! he.process_input(Input::DnsResult(dns_result), Instant::now());
 //! ```
+//!
+//! For complete example usage, see the tests in [tests/integration.rs].
 
 use std::cmp::Ordering;
 use std::collections::HashSet;

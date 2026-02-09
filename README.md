@@ -15,55 +15,27 @@ network conditions including HTTPS service discovery and QUIC.
 
 ```rust
 
-let mut he = HappyEyeballs::new("example.com".into(), 443);
+let mut he = HappyEyeballs::new("example.com", 443).unwrap();
+let now = Instant::now();
 
-let mut now = Instant::now();
-let mut input = None;
-loop {
-    match he.process(input.take(), now) {
-        None => break, // nothing more to do right now
-        Some(Output::SendDnsQuery { hostname, record_type }) => {
-            let response = match record_type {
-                DnsRecordType::Https => {
-                    let mut alpn = HashSet::new();
-                    alpn.insert(Protocol::H3);
-                    alpn.insert(Protocol::H2);
-                    DnsResponse {
-                        target_name: hostname.clone(),
-                        inner: DnsResponseInner::Https(Ok(vec![ServiceInfo {
-                            priority: 1,
-                            target_name: TargetName::from("example.com"),
-                            alpn_protocols: alpn,
-                            ech_config: None,
-                            ipv4_hints: vec![Ipv4Addr::new(192, 0, 2, 1)],
-                            ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)],
-                        }])),
-                    }
-                }
-                DnsRecordType::Aaaa => DnsResponse {
-                    target_name: hostname.clone(),
-                    inner: DnsResponseInner::Aaaa(Ok(vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)])),
-                },
-                DnsRecordType::A => DnsResponse {
-                    target_name: hostname.clone(),
-                    inner: DnsResponseInner::A(Ok(vec![Ipv4Addr::new(192, 0, 2, 1)])),
-                },
-            };
-            input = Some(Input::DnsResponse(response));
+// First process outputs from the state machine, e.g. a DNS query to send:
+while let Some(output) = he.process_output(now) {
+    match output {
+        Output::SendDnsQuery { hostname, record_type } => {
+            // Send DNS query.
         }
-        Some(Output::AttemptConnection { endpoint }) => {
-            let _ = he.process(
-                Some(Input::ConnectionResult { address: endpoint.address, result: Ok(()) }),
-                now,
-            );
-            break;
+        Output::AttemptConnection { endpoint } => {
+            // Attempt connection.
         }
-        Some(Output::CancelConnection(_addr)) => {}
-        Some(Output::Timer { duration }) => {
-            now += duration;
-        }
+        _ => {}
     }
 }
+
+// Later pass results as input back to the state machine, e.g. a DNS
+// response arrives:
+he.process_input(Input::DnsResult(dns_result), Instant::now());
 ```
+
+For complete example usage, see the tests in [tests/integration.rs].
 
 <!-- cargo-rdme end -->
