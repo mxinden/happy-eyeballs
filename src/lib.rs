@@ -13,7 +13,7 @@
 //!
 //! ```rust
 //! # use happy_eyeballs::{
-//! #     DnsRecordType, DnsResult, DnsResultInner, HappyEyeballs, Input, Output, TargetName,
+//! #     DnsRecordType, DnsResult, DnsResultInner, HappyEyeballs, Id, Input, Output, TargetName,
 //! # };
 //! # use std::{net::{Ipv4Addr, Ipv6Addr}, time::Instant};
 //!
@@ -21,12 +21,14 @@
 //! let now = Instant::now();
 //!
 //! // First process outputs from the state machine, e.g. a DNS query to send:
+//! # let mut dns_id: Option<Id> = None;
 //! while let Some(output) = he.process_output(now) {
 //!     match output {
-//!         Output::SendDnsQuery { hostname, record_type } => {
+//!         Output::SendDnsQuery { id, hostname, record_type } => {
 //!             // Send DNS query.
+//! #           dns_id = Some(id);
 //!         }
-//!         Output::AttemptConnection { endpoint } => {
+//!         Output::AttemptConnection { id, endpoint } => {
 //!             // Attempt connection.
 //!         }
 //!         _ => {}
@@ -39,7 +41,7 @@
 //! #     target_name: TargetName::from("example.com"),
 //! #     inner: DnsResultInner::Aaaa(Ok(vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)])),
 //! # };
-//! he.process_input(Input::DnsResult(dns_result), Instant::now());
+//! he.process_input(Input::DnsResult { id: dns_id.unwrap(), result: dns_result }, Instant::now());
 //! ```
 //!
 //! For complete example usage, see the tests in [`tests/integration.rs`](tests/integration.rs).
@@ -53,6 +55,10 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::{Level, instrument, trace};
 use url::Host;
+
+mod id;
+pub use id::Id;
+use id::IdGenerator;
 
 /// > The RECOMMENDED value for the Resolution Delay is 50 milliseconds.
 ///
@@ -69,11 +75,11 @@ pub const CONNECTION_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
     /// DNS query result received
-    DnsResult(DnsResult),
+    DnsResult { id: Id, result: DnsResult },
 
     /// Connection attempt result
     ConnectionResult {
-        endpoint: Endpoint,
+        id: Id,
         result: Result<(), String>,
         // TODO: When attempting a connection with ECH, the remote might send a
         // new ECH config to us on failure. That might be carried in this event?
@@ -204,6 +210,7 @@ impl Debug for TargetName {
 pub enum Output {
     /// Send a DNS query
     SendDnsQuery {
+        id: Id,
         hostname: TargetName,
         record_type: DnsRecordType,
     },
@@ -215,6 +222,7 @@ pub enum Output {
 
     /// Attempt to connect to an address
     AttemptConnection {
+        id: Id,
         endpoint: Endpoint,
     },
 
@@ -231,7 +239,7 @@ pub enum Output {
 impl Output {
     pub fn attempt(self) -> Option<Endpoint> {
         match self {
-            Output::AttemptConnection { endpoint } => Some(endpoint),
+            Output::AttemptConnection { endpoint, .. } => Some(endpoint),
             _ => None,
         }
     }
@@ -358,23 +366,29 @@ impl ConnectionAttemptProtocols {
 #[derive(Debug, Clone, PartialEq)]
 enum DnsQuery {
     InProgress {
+        id: Id,
         target_name: TargetName,
         record_type: DnsRecordType,
     },
     Completed {
+        id: Id,
         completed: Instant,
         response: DnsResult,
     },
 }
 
 impl DnsQuery {
+    fn id(&self) -> Id {
+        match self {
+            DnsQuery::InProgress { id, .. } => *id,
+            DnsQuery::Completed { id, .. } => *id,
+        }
+    }
+
     fn record_type(&self) -> DnsRecordType {
         match self {
             DnsQuery::InProgress { record_type, .. } => *record_type,
-            DnsQuery::Completed {
-                response,
-                completed: _,
-            } => match response.inner {
+            DnsQuery::Completed { response, .. } => match response.inner {
                 DnsResultInner::Https(_) => DnsRecordType::Https,
                 DnsResultInner::Aaaa(_) => DnsRecordType::Aaaa,
                 DnsResultInner::A(_) => DnsRecordType::A,
@@ -385,20 +399,14 @@ impl DnsQuery {
     fn target_name(&self) -> &TargetName {
         match self {
             DnsQuery::InProgress { target_name, .. } => target_name,
-            DnsQuery::Completed {
-                response,
-                completed: _,
-            } => &response.target_name,
+            DnsQuery::Completed { response, .. } => &response.target_name,
         }
     }
 
     fn get_response(&self) -> Option<&DnsResult> {
         match self {
             DnsQuery::InProgress { .. } => None,
-            DnsQuery::Completed {
-                response,
-                completed: _,
-            } => Some(response),
+            DnsQuery::Completed { response, .. } => Some(response),
         }
     }
 }
@@ -515,6 +523,7 @@ pub enum ConnectionState {
 
 #[derive(Debug, Clone)]
 pub struct ConnectionAttempt {
+    pub id: Id,
     pub endpoint: Endpoint,
     pub started: Instant,
     pub state: ConnectionState,
@@ -555,6 +564,7 @@ impl Endpoint {
 
 /// Happy Eyeballs v3 state machine
 pub struct HappyEyeballs {
+    id_generator: IdGenerator,
     dns_queries: Vec<DnsQuery>,
     connection_attempts: Vec<ConnectionAttempt>,
     /// Network configuration
@@ -626,6 +636,7 @@ impl HappyEyeballs {
             },
         };
         Ok(Self {
+            id_generator: IdGenerator::new(),
             network_config,
             dns_queries: Vec::new(),
             connection_attempts: Vec::new(),
@@ -644,11 +655,11 @@ impl HappyEyeballs {
         trace!(input = ?input);
 
         match input {
-            Input::DnsResult(response) => {
-                self.on_dns_response(response, now);
+            Input::DnsResult { id, result } => {
+                self.on_dns_response(id, result, now);
             }
-            Input::ConnectionResult { endpoint, result } => {
-                self.on_connection_result(endpoint, result);
+            Input::ConnectionResult { id, result } => {
+                self.on_connection_result(id, result);
             }
         }
     }
@@ -747,7 +758,7 @@ impl HappyEyeballs {
                 DnsQuery::Completed {
                     completed,
                     // TODO: Currently considers all queries. Should we only consider A and AAAA?
-                    response: _,
+                    ..
                 } => Some(completed),
                 _ => None,
             })
@@ -780,11 +791,14 @@ impl HappyEyeballs {
                 .iter()
                 .any(|q| q.record_type() == record_type)
             {
+                let id = self.id_generator.next_id();
                 self.dns_queries.push(DnsQuery::InProgress {
+                    id,
                     target_name: target_name.clone(),
                     record_type,
                 });
                 return Some(Output::SendDnsQuery {
+                    id,
                     hostname: target_name,
                     record_type,
                 });
@@ -806,12 +820,12 @@ impl HappyEyeballs {
             .iter()
             .filter_map(|q| match q {
                 DnsQuery::Completed {
-                    completed: _,
                     response:
                         DnsResult {
                             target_name: _,
                             inner: DnsResultInner::Https(Ok(service_infos)),
                         },
+                    ..
                 } => Some(service_infos.iter().map(|i| &i.target_name)),
                 _ => None,
             })
@@ -828,12 +842,15 @@ impl HappyEyeballs {
                 }
 
                 let target_name = target_name.clone();
+                let id = self.id_generator.next_id();
 
                 self.dns_queries.push(DnsQuery::InProgress {
+                    id,
                     target_name: target_name.clone(),
                     record_type,
                 });
                 return Some(Output::SendDnsQuery {
+                    id,
                     hostname: target_name,
                     record_type,
                 });
@@ -843,29 +860,22 @@ impl HappyEyeballs {
         None
     }
 
-    fn on_dns_response(&mut self, response: DnsResult, now: Instant) {
-        let Some(query) = self
-            .dns_queries
-            .iter_mut()
-            .filter(|q| *q.target_name() == response.target_name)
-            .find(|q| q.record_type() == response.record_type())
-        else {
-            debug_assert!(false, "got {response:?} but never sent query");
+    fn on_dns_response(&mut self, id: Id, response: DnsResult, now: Instant) {
+        let Some(query) = self.dns_queries.iter_mut().find(|q| q.id() == id) else {
+            debug_assert!(false, "got {response:?} for unknown id {id:?}");
             return;
         };
 
         match &query {
             DnsQuery::InProgress { .. } => {}
-            DnsQuery::Completed {
-                completed: _,
-                response,
-            } => {
-                debug_assert!(false, "got {response:?} for already responded {query:?}");
+            DnsQuery::Completed { .. } => {
+                debug_assert!(false, "got {response:?} for already completed {query:?}");
                 return;
             }
         }
 
         *query = DnsQuery::Completed {
+            id,
             completed: now,
             response,
         };
@@ -877,25 +887,16 @@ impl HappyEyeballs {
     /// > connection SHOULD be ignored.
     ///
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-6>
-    fn on_connection_result(&mut self, endpoint: Endpoint, result: Result<(), String>) {
-        // Find the connection attempt for this address
-        let attempt = self
-            .connection_attempts
-            .iter_mut()
-            .find(|attempt| attempt.endpoint == endpoint);
-
-        let Some(attempt) = attempt else {
-            debug_assert!(
-                false,
-                "got connection result for {endpoint:?} but never attempted connection"
-            );
+    fn on_connection_result(&mut self, id: Id, result: Result<(), String>) {
+        let Some(attempt) = self.connection_attempts.iter_mut().find(|a| a.id == id) else {
+            debug_assert!(false, "got connection result for unknown id {id:?}");
             return;
         };
 
         debug_assert_eq!(
             attempt.state,
             ConnectionState::InProgress,
-            "got connection result for {endpoint:?} but attempt is not in progress"
+            "got connection result but attempt is not in progress: {attempt:?}"
         );
 
         match result {
@@ -968,14 +969,16 @@ impl HappyEyeballs {
             return None;
         }
         let endpoint = self.next_endpoint_to_attempt()?;
+        let id = self.id_generator.next_id();
 
         self.connection_attempts.push(ConnectionAttempt {
+            id,
             endpoint: endpoint.clone(),
             started: now,
             state: ConnectionState::InProgress,
         });
 
-        Some(Output::AttemptConnection { endpoint })
+        Some(Output::AttemptConnection { id, endpoint })
     }
 
     fn next_endpoint_to_attempt(&self) -> Option<Endpoint> {
@@ -1040,12 +1043,12 @@ impl HappyEyeballs {
                 matches!(
                     q,
                     DnsQuery::Completed {
-                        completed: _,
                         response:
                             DnsResult {
                                 inner: DnsResultInner::Aaaa(Ok(addrs)),
                                 ..
                             },
+                        ..
                     } if !addrs.is_empty()
                 )
             })
@@ -1066,12 +1069,12 @@ impl HappyEyeballs {
                 matches!(
                     q,
                     DnsQuery::Completed {
-                        completed: _,
                         response:
                             DnsResult {
                                 inner: DnsResultInner::A(Ok(addrs)),
                                 ..
                             },
+                        ..
                     } if !addrs.is_empty()
                 )
             })
@@ -1101,12 +1104,12 @@ impl HappyEyeballs {
         // Add protocols from DNS HTTPS records
         for alpn in self.dns_queries.iter().filter_map(|q| match q {
             DnsQuery::Completed {
-                completed: _,
                 response:
                     DnsResult {
                         inner: DnsResultInner::Https(Ok(infos)),
                         ..
                     },
+                ..
             } => Some(
                 infos
                     .iter()
@@ -1162,12 +1165,12 @@ impl HappyEyeballs {
             .iter()
             .filter_map(|q| match q {
                 DnsQuery::Completed {
-                    completed: _,
                     response:
                         DnsResult {
                             inner: DnsResultInner::Https(Ok(infos)),
                             ..
                         },
+                    ..
                     // TODO: What about other target names?
                 } if *q.target_name() == target_name => {
                     infos.iter().find_map(|info| info.ech_config.clone())
@@ -1192,10 +1195,7 @@ impl HappyEyeballs {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
         if !self.dns_queries.iter().any(|q| match q {
-            DnsQuery::Completed {
-                completed: _,
-                response,
-            } => match &response.inner {
+            DnsQuery::Completed { response, .. } => match &response.inner {
                 DnsResultInner::Aaaa(Ok(addrs)) => !addrs.is_empty(),
                 DnsResultInner::A(Ok(addrs)) => !addrs.is_empty(),
                 DnsResultInner::Https(Ok(infos)) => infos
