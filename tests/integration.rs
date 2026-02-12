@@ -6,8 +6,8 @@ use std::{
 
 use happy_eyeballs::{
     AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptProtocols, DnsRecordType, DnsResult,
-    DnsResultInner, Endpoint, HappyEyeballs, HttpVersions, Id, Input, IpPreference, NetworkConfig,
-    Output, Protocol, RESOLUTION_DELAY,
+    Endpoint, HappyEyeballs, HttpVersions, Id, Input, IpPreference, NetworkConfig, Output,
+    Protocol, RESOLUTION_DELAY,
 };
 use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
 
@@ -38,135 +38,105 @@ impl HappyEyeballsExt for HappyEyeballs {
 fn in_dns_https_positive(id: Id) -> Input {
     Input::DnsResult {
         id,
-        result: DnsResult {
+        result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+            priority: 1,
             target_name: HOSTNAME.into(),
-            inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
-                priority: 1,
-                target_name: HOSTNAME.into(),
-                alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
-                ipv6_hints: vec![],
-                ipv4_hints: vec![],
-                ech_config: None,
-            }])),
-        },
+            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+            ipv6_hints: vec![],
+            ipv4_hints: vec![],
+            ech_config: None,
+        }])),
     }
 }
 
 fn in_dns_https_positive_no_alpn(id: Id) -> Input {
     Input::DnsResult {
         id,
-        result: DnsResult {
+        result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+            priority: 1,
             target_name: HOSTNAME.into(),
-            inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
-                priority: 1,
-                target_name: HOSTNAME.into(),
-                alpn_protocols: HashSet::new(),
-                ipv6_hints: vec![],
-                ipv4_hints: vec![],
-                ech_config: None,
-            }])),
-        },
+            alpn_protocols: HashSet::new(),
+            ipv6_hints: vec![],
+            ipv4_hints: vec![],
+            ech_config: None,
+        }])),
     }
 }
 
 fn in_dns_https_positive_h2_h3(id: Id) -> Input {
     Input::DnsResult {
         id,
-        result: DnsResult {
+        result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+            priority: 1,
             target_name: HOSTNAME.into(),
-            inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
-                priority: 1,
-                target_name: HOSTNAME.into(),
-                alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
-                ipv6_hints: vec![],
-                ipv4_hints: vec![],
-                ech_config: None,
-            }])),
-        },
+            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+            ipv6_hints: vec![],
+            ipv4_hints: vec![],
+            ech_config: None,
+        }])),
     }
 }
 
 fn in_dns_https_positive_v6_hints(id: Id) -> Input {
     Input::DnsResult {
         id,
-        result: DnsResult {
+        result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+            priority: 1,
             target_name: HOSTNAME.into(),
-            inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
-                priority: 1,
-                target_name: HOSTNAME.into(),
-                alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
-                ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)],
-                ipv4_hints: vec![],
-                ech_config: None,
-            }])),
-        },
+            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+            ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)],
+            ipv4_hints: vec![],
+            ech_config: None,
+        }])),
     }
 }
 
 fn in_dns_https_positive_svc1(id: Id) -> Input {
     Input::DnsResult {
         id,
-        result: DnsResult {
-            target_name: HOSTNAME.into(),
-            inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
-                priority: 1,
-                target_name: "svc1.example.com.".into(),
-                alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
-                ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)],
-                ipv4_hints: vec![],
-                ech_config: None,
-            }])),
-        },
+        result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+            priority: 1,
+            target_name: "svc1.example.com.".into(),
+            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+            ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)],
+            ipv4_hints: vec![],
+            ech_config: None,
+        }])),
     }
 }
 
 fn in_dns_https_negative(id: Id) -> Input {
     Input::DnsResult {
         id,
-        result: DnsResult {
-            target_name: HOSTNAME.into(),
-            inner: DnsResultInner::Https(Err(())),
-        },
+        result: DnsResult::Https(Err(())),
     }
 }
 
 fn in_dns_aaaa_positive(id: Id) -> Input {
     Input::DnsResult {
         id,
-        result: DnsResult {
-            target_name: HOSTNAME.into(),
-            inner: DnsResultInner::Aaaa(Ok(vec![V6_ADDR])),
-        },
+        result: DnsResult::Aaaa(Ok(vec![V6_ADDR])),
     }
 }
 
 fn in_dns_a_positive(id: Id) -> Input {
     Input::DnsResult {
         id,
-        result: DnsResult {
-            target_name: HOSTNAME.into(),
-            inner: DnsResultInner::A(Ok(vec![V4_ADDR])),
-        },
+        result: DnsResult::A(Ok(vec![V4_ADDR])),
     }
 }
 
 fn in_dns_aaaa_negative(id: Id) -> Input {
     Input::DnsResult {
         id,
-        result: DnsResult {
-            target_name: HOSTNAME.into(),
-            inner: DnsResultInner::Aaaa(Err(())),
-        },
+        result: DnsResult::Aaaa(Err(())),
     }
 }
 
 fn in_dns_a_negative(id: Id) -> Input {
     Input::DnsResult {
         id,
-        result: DnsResult {
-            target_name: HOSTNAME.into(),
-            inner: DnsResultInner::A(Err(())),
-        },
+        result: DnsResult::A(Err(())),
     }
 }
 
@@ -693,10 +663,7 @@ mod section_4_hostname_resolution {
                 (
                     Some(Input::DnsResult {
                         id: Id::from(1),
-                        result: DnsResult {
-                            target_name: HOSTNAME.into(),
-                            inner: DnsResultInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2, V6_ADDR_3])),
-                        },
+                        result: DnsResult::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2, V6_ADDR_3])),
                     }),
                     Some(out_attempt_v6_h1_h2(Id::from(3))),
                 ),
@@ -828,10 +795,7 @@ mod section_6_connection_attempts {
                 (
                     Some(Input::DnsResult {
                         id: Id::from(1),
-                        result: DnsResult {
-                            target_name: HOSTNAME.into(),
-                            inner: DnsResultInner::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2])),
-                        },
+                        result: DnsResult::Aaaa(Ok(vec![V6_ADDR, V6_ADDR_2])),
                     }),
                     Some(out_attempt_v6_h1_h2(Id::from(3))),
                 ),
@@ -1096,17 +1060,14 @@ fn ech_config_propagated_to_endpoint() {
             (
                 Some(Input::DnsResult {
                     id: Id::from(0),
-                    result: DnsResult {
+                    result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+                        priority: 1,
                         target_name: HOSTNAME.into(),
-                        inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
-                            priority: 1,
-                            target_name: HOSTNAME.into(),
-                            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
-                            ipv6_hints: vec![V6_ADDR],
-                            ipv4_hints: vec![],
-                            ech_config: Some(ECH_CONFIG.to_vec()),
-                        }])),
-                    },
+                        alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+                        ipv6_hints: vec![V6_ADDR],
+                        ipv4_hints: vec![],
+                        ech_config: Some(ECH_CONFIG.to_vec()),
+                    }])),
                 }),
                 Some(Output::AttemptConnection {
                     id: Id::from(3),
@@ -1134,17 +1095,14 @@ fn ech_config_from_https_applies_to_aaaa() {
             (
                 Some(Input::DnsResult {
                     id: Id::from(0),
-                    result: DnsResult {
+                    result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+                        priority: 1,
                         target_name: HOSTNAME.into(),
-                        inner: DnsResultInner::Https(Ok(vec![happy_eyeballs::ServiceInfo {
-                            priority: 1,
-                            target_name: HOSTNAME.into(),
-                            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
-                            ipv6_hints: vec![],
-                            ipv4_hints: vec![],
-                            ech_config: Some(ECH_CONFIG.to_vec()),
-                        }])),
-                    },
+                        alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+                        ipv6_hints: vec![],
+                        ipv4_hints: vec![],
+                        ech_config: Some(ECH_CONFIG.to_vec()),
+                    }])),
                 }),
                 Some(out_resolution_delay()),
             ),

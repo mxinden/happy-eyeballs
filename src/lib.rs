@@ -13,7 +13,7 @@
 //!
 //! ```rust
 //! # use happy_eyeballs::{
-//! #     DnsRecordType, DnsResult, DnsResultInner, HappyEyeballs, Id, Input, Output, TargetName,
+//! #     DnsRecordType, DnsResult, HappyEyeballs, Id, Input, Output, TargetName,
 //! # };
 //! # use std::{net::{Ipv4Addr, Ipv6Addr}, time::Instant};
 //!
@@ -37,10 +37,7 @@
 //!
 //! // Later pass results as input back to the state machine, e.g. a DNS
 //! // response arrives:
-//! # let dns_result = DnsResult {
-//! #     target_name: TargetName::from("example.com"),
-//! #     inner: DnsResultInner::Aaaa(Ok(vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)])),
-//! # };
+//! # let dns_result = DnsResult::Aaaa(Ok(vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)]));
 //! he.process_input(Input::DnsResult { id: dns_id.unwrap(), result: dns_result }, Instant::now());
 //! ```
 //!
@@ -87,42 +84,26 @@ pub enum Input {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct DnsResult {
-    pub target_name: TargetName,
-    pub inner: DnsResultInner,
-}
-
-impl DnsResult {
-    fn record_type(&self) -> DnsRecordType {
-        self.inner.record_type()
-    }
-
-    fn positive(&self) -> bool {
-        self.inner.positive()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum DnsResultInner {
+pub enum DnsResult {
     Https(Result<Vec<ServiceInfo>, ()>),
     Aaaa(Result<Vec<Ipv6Addr>, ()>),
     A(Result<Vec<Ipv4Addr>, ()>),
 }
 
-impl DnsResultInner {
+impl DnsResult {
     fn record_type(&self) -> DnsRecordType {
         match self {
-            DnsResultInner::Https(_) => DnsRecordType::Https,
-            DnsResultInner::Aaaa(_) => DnsRecordType::Aaaa,
-            DnsResultInner::A(_) => DnsRecordType::A,
+            DnsResult::Https(_) => DnsRecordType::Https,
+            DnsResult::Aaaa(_) => DnsRecordType::Aaaa,
+            DnsResult::A(_) => DnsRecordType::A,
         }
     }
 
     fn positive(&self) -> bool {
         match self {
-            DnsResultInner::Https(r) => r.is_ok(),
-            DnsResultInner::Aaaa(r) => r.is_ok(),
-            DnsResultInner::A(r) => r.is_ok(),
+            DnsResult::Https(r) => r.is_ok(),
+            DnsResult::Aaaa(r) => r.is_ok(),
+            DnsResult::A(r) => r.is_ok(),
         }
     }
 
@@ -135,7 +116,7 @@ impl DnsResultInner {
         ech_config: Option<Vec<u8>>,
     ) -> Vec<Endpoint> {
         match self {
-            DnsResultInner::Https(infos) => infos
+            DnsResult::Https(infos) => infos
                 .as_ref()
                 .ok()
                 .into_iter()
@@ -146,7 +127,7 @@ impl DnsResultInner {
                 })
                 // TODO: way around allocation?
                 .collect(),
-            DnsResultInner::Aaaa(ipv6_addrs) => ipv6_addrs
+            DnsResult::Aaaa(ipv6_addrs) => ipv6_addrs
                 .as_ref()
                 .ok()
                 .into_iter()
@@ -163,7 +144,7 @@ impl DnsResultInner {
                 })
                 // TODO: way around allocation?
                 .collect(),
-            DnsResultInner::A(ipv4_addrs) => ipv4_addrs
+            DnsResult::A(ipv4_addrs) => ipv4_addrs
                 .as_ref()
                 .ok()
                 .into_iter()
@@ -372,6 +353,7 @@ enum DnsQuery {
     },
     Completed {
         id: Id,
+        target_name: TargetName,
         completed: Instant,
         response: DnsResult,
     },
@@ -388,10 +370,10 @@ impl DnsQuery {
     fn record_type(&self) -> DnsRecordType {
         match self {
             DnsQuery::InProgress { record_type, .. } => *record_type,
-            DnsQuery::Completed { response, .. } => match response.inner {
-                DnsResultInner::Https(_) => DnsRecordType::Https,
-                DnsResultInner::Aaaa(_) => DnsRecordType::Aaaa,
-                DnsResultInner::A(_) => DnsRecordType::A,
+            DnsQuery::Completed { response, .. } => match response {
+                DnsResult::Https(_) => DnsRecordType::Https,
+                DnsResult::Aaaa(_) => DnsRecordType::Aaaa,
+                DnsResult::A(_) => DnsRecordType::A,
             },
         }
     }
@@ -399,7 +381,7 @@ impl DnsQuery {
     fn target_name(&self) -> &TargetName {
         match self {
             DnsQuery::InProgress { target_name, .. } => target_name,
-            DnsQuery::Completed { response, .. } => &response.target_name,
+            DnsQuery::Completed { target_name, .. } => target_name,
         }
     }
 
@@ -820,11 +802,7 @@ impl HappyEyeballs {
             .iter()
             .filter_map(|q| match q {
                 DnsQuery::Completed {
-                    response:
-                        DnsResult {
-                            target_name: _,
-                            inner: DnsResultInner::Https(Ok(service_infos)),
-                        },
+                    response: DnsResult::Https(Ok(service_infos)),
                     ..
                 } => Some(service_infos.iter().map(|i| &i.target_name)),
                 _ => None,
@@ -866,16 +844,17 @@ impl HappyEyeballs {
             return;
         };
 
-        match &query {
-            DnsQuery::InProgress { .. } => {}
+        let target_name = match &query {
+            DnsQuery::InProgress { target_name, .. } => target_name.clone(),
             DnsQuery::Completed { .. } => {
                 debug_assert!(false, "got {response:?} for already completed {query:?}");
                 return;
             }
-        }
+        };
 
         *query = DnsQuery::Completed {
             id,
+            target_name,
             completed: now,
             response,
         };
@@ -1009,7 +988,7 @@ impl HappyEyeballs {
             .iter()
             .filter_map(|q| q.get_response())
             .flat_map(|r| {
-                r.inner.flatten_into_endpoints(
+                r.flatten_into_endpoints(
                     self.port,
                     got_a,
                     got_aaaa,
@@ -1043,11 +1022,7 @@ impl HappyEyeballs {
                 matches!(
                     q,
                     DnsQuery::Completed {
-                        response:
-                            DnsResult {
-                                inner: DnsResultInner::Aaaa(Ok(addrs)),
-                                ..
-                            },
+                        response: DnsResult::Aaaa(Ok(addrs)),
                         ..
                     } if !addrs.is_empty()
                 )
@@ -1069,11 +1044,7 @@ impl HappyEyeballs {
                 matches!(
                     q,
                     DnsQuery::Completed {
-                        response:
-                            DnsResult {
-                                inner: DnsResultInner::A(Ok(addrs)),
-                                ..
-                            },
+                        response: DnsResult::A(Ok(addrs)),
                         ..
                     } if !addrs.is_empty()
                 )
@@ -1104,11 +1075,7 @@ impl HappyEyeballs {
         // Add protocols from DNS HTTPS records
         for alpn in self.dns_queries.iter().filter_map(|q| match q {
             DnsQuery::Completed {
-                response:
-                    DnsResult {
-                        inner: DnsResultInner::Https(Ok(infos)),
-                        ..
-                    },
+                response: DnsResult::Https(Ok(infos)),
                 ..
             } => Some(
                 infos
@@ -1165,11 +1132,7 @@ impl HappyEyeballs {
             .iter()
             .filter_map(|q| match q {
                 DnsQuery::Completed {
-                    response:
-                        DnsResult {
-                            inner: DnsResultInner::Https(Ok(infos)),
-                            ..
-                        },
+                    response: DnsResult::Https(Ok(infos)),
                     ..
                     // TODO: What about other target names?
                 } if *q.target_name() == target_name => {
@@ -1195,10 +1158,10 @@ impl HappyEyeballs {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
         if !self.dns_queries.iter().any(|q| match q {
-            DnsQuery::Completed { response, .. } => match &response.inner {
-                DnsResultInner::Aaaa(Ok(addrs)) => !addrs.is_empty(),
-                DnsResultInner::A(Ok(addrs)) => !addrs.is_empty(),
-                DnsResultInner::Https(Ok(infos)) => infos
+            DnsQuery::Completed { response, .. } => match response {
+                DnsResult::Aaaa(Ok(addrs)) => !addrs.is_empty(),
+                DnsResult::A(Ok(addrs)) => !addrs.is_empty(),
+                DnsResult::Https(Ok(infos)) => infos
                     .iter()
                     .any(|i| !i.ipv4_hints.is_empty() || !i.ipv6_hints.is_empty()),
 

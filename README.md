@@ -21,10 +21,10 @@ let now = Instant::now();
 // First process outputs from the state machine, e.g. a DNS query to send:
 while let Some(output) = he.process_output(now) {
     match output {
-        Output::SendDnsQuery { hostname, record_type } => {
+        Output::SendDnsQuery { id, hostname, record_type } => {
             // Send DNS query.
         }
-        Output::AttemptConnection { endpoint } => {
+        Output::AttemptConnection { id, endpoint } => {
             // Attempt connection.
         }
         _ => {}
@@ -33,7 +33,7 @@ while let Some(output) = he.process_output(now) {
 
 // Later pass results as input back to the state machine, e.g. a DNS
 // response arrives:
-he.process_input(Input::DnsResult(dns_result), Instant::now());
+he.process_input(Input::DnsResult { id: dns_id.unwrap(), result: dns_result }, Instant::now());
 ```
 
 For complete example usage, see the tests in [`tests/integration.rs`](tests/integration.rs).
