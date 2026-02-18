@@ -5,9 +5,9 @@ use std::{
 };
 
 use happy_eyeballs::{
-    AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptProtocols, DnsRecordType, DnsResult,
-    Endpoint, HappyEyeballs, HttpVersions, Id, Input, IpPreference, NetworkConfig, Output,
-    Protocol, RESOLUTION_DELAY,
+    AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult,
+    Endpoint, HappyEyeballs, HttpVersion, HttpVersions, Id, Input, IpPreference, NetworkConfig,
+    Output, RESOLUTION_DELAY,
 };
 
 const HOSTNAME: &str = "example.com";
@@ -40,7 +40,7 @@ fn in_dns_https_positive(id: Id) -> Input {
         result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: HOSTNAME.into(),
-            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+            alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
             ipv6_hints: vec![],
             ipv4_hints: vec![],
             ech_config: None,
@@ -68,7 +68,7 @@ fn in_dns_https_positive_h2_h3(id: Id) -> Input {
         result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: HOSTNAME.into(),
-            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+            alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
             ipv6_hints: vec![],
             ipv4_hints: vec![],
             ech_config: None,
@@ -82,7 +82,7 @@ fn in_dns_https_positive_v6_hints(id: Id) -> Input {
         result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: HOSTNAME.into(),
-            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+            alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
             ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)],
             ipv4_hints: vec![],
             ech_config: None,
@@ -96,7 +96,7 @@ fn in_dns_https_positive_svc1(id: Id) -> Input {
         result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
             priority: 1,
             target_name: "svc1.example.com.".into(),
-            alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+            alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
             ipv6_hints: vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2)],
             ipv4_hints: vec![],
             ech_config: None,
@@ -187,7 +187,7 @@ fn out_attempt_v6_h1_h2(id: Id) -> Output {
         id,
         endpoint: Endpoint {
             address: SocketAddr::new(V6_ADDR.into(), PORT),
-            protocol: ConnectionAttemptProtocols::H2OrH1,
+            protocol: ConnectionAttemptHttpVersions::H2OrH1,
             ech_config: None,
         },
     }
@@ -198,7 +198,7 @@ fn out_attempt_v6_h2(id: Id) -> Output {
         id,
         endpoint: Endpoint {
             address: SocketAddr::new(V6_ADDR.into(), PORT),
-            protocol: ConnectionAttemptProtocols::H2,
+            protocol: ConnectionAttemptHttpVersions::H2,
             ech_config: None,
         },
     }
@@ -209,7 +209,7 @@ fn out_attempt_v6_h3(id: Id) -> Output {
         id,
         endpoint: Endpoint {
             address: SocketAddr::new(V6_ADDR.into(), PORT),
-            protocol: ConnectionAttemptProtocols::H3,
+            protocol: ConnectionAttemptHttpVersions::H3,
             ech_config: None,
         },
     }
@@ -220,7 +220,7 @@ fn out_attempt_v4_h1_h2(id: Id) -> Output {
         id,
         endpoint: Endpoint {
             address: SocketAddr::new(V4_ADDR.into(), PORT),
-            protocol: ConnectionAttemptProtocols::H2OrH1,
+            protocol: ConnectionAttemptHttpVersions::H2OrH1,
             ech_config: None,
         },
     }
@@ -231,7 +231,7 @@ fn out_attempt_v4_h2(id: Id) -> Output {
         id,
         endpoint: Endpoint {
             address: SocketAddr::new(V4_ADDR.into(), PORT),
-            protocol: ConnectionAttemptProtocols::H2,
+            protocol: ConnectionAttemptHttpVersions::H2,
             ech_config: None,
         },
     }
@@ -242,7 +242,7 @@ fn out_attempt_v4_h3(id: Id) -> Output {
         id,
         endpoint: Endpoint {
             address: SocketAddr::new(V4_ADDR.into(), PORT),
-            protocol: ConnectionAttemptProtocols::H3,
+            protocol: ConnectionAttemptHttpVersions::H3,
             ech_config: None,
         },
     }
@@ -673,7 +673,7 @@ mod section_4_hostname_resolution {
                     id: Id::from(4),
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR_2.into(), PORT),
-                        protocol: ConnectionAttemptProtocols::H2OrH1,
+                        protocol: ConnectionAttemptHttpVersions::H2OrH1,
                         ech_config: None,
                     },
                 }),
@@ -808,7 +808,7 @@ mod section_6_connection_attempts {
                     id: Id::from(4),
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR_2.into(), PORT),
-                        protocol: ConnectionAttemptProtocols::H2OrH1,
+                        protocol: ConnectionAttemptHttpVersions::H2OrH1,
                         ech_config: None,
                     },
                 }),
@@ -1024,7 +1024,7 @@ fn alt_svc_construction() {
         alt_svc: vec![AltSvc {
             host: None,
             port: None,
-            protocol: Protocol::H3,
+            protocol: HttpVersion::H3,
         }],
     };
     let mut he = HappyEyeballs::new_with_network_config(HOSTNAME, PORT, config).unwrap();
@@ -1056,7 +1056,7 @@ fn ech_config_propagated_to_endpoint() {
                     result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
                         priority: 1,
                         target_name: HOSTNAME.into(),
-                        alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+                        alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
                         ipv6_hints: vec![V6_ADDR],
                         ipv4_hints: vec![],
                         ech_config: Some(ECH_CONFIG.to_vec()),
@@ -1066,7 +1066,7 @@ fn ech_config_propagated_to_endpoint() {
                     id: Id::from(3),
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptProtocols::H3,
+                        protocol: ConnectionAttemptHttpVersions::H3,
                         ech_config: Some(ECH_CONFIG.to_vec()),
                     },
                 }),
@@ -1091,7 +1091,7 @@ fn ech_config_from_https_applies_to_aaaa() {
                     result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
                         priority: 1,
                         target_name: HOSTNAME.into(),
-                        alpn_protocols: HashSet::from([Protocol::H3, Protocol::H2]),
+                        alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
                         ipv6_hints: vec![],
                         ipv4_hints: vec![],
                         ech_config: Some(ECH_CONFIG.to_vec()),
@@ -1105,7 +1105,7 @@ fn ech_config_from_https_applies_to_aaaa() {
                     id: Id::from(3),
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptProtocols::H3,
+                        protocol: ConnectionAttemptHttpVersions::H3,
                         ech_config: Some(ECH_CONFIG.to_vec()),
                     },
                 }),
@@ -1149,7 +1149,7 @@ fn alt_svc_used_immediately() {
         alt_svc: vec![AltSvc {
             host: None,
             port: None,
-            protocol: Protocol::H3,
+            protocol: HttpVersion::H3,
         }],
     };
     let mut he = HappyEyeballs::new_with_network_config(HOSTNAME, PORT, config).unwrap();

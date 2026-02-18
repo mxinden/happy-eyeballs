@@ -112,7 +112,7 @@ impl DnsResult {
         port: u16,
         got_a: bool,
         got_aaaa: bool,
-        protocols: HashSet<ConnectionAttemptProtocols>,
+        protocols: HashSet<ConnectionAttemptHttpVersions>,
         ech_config: Option<Vec<u8>>,
     ) -> Vec<Endpoint> {
         match self {
@@ -239,7 +239,7 @@ pub enum DnsRecordType {
 pub struct ServiceInfo {
     pub priority: u16,
     pub target_name: TargetName,
-    pub alpn_protocols: HashSet<Protocol>,
+    pub alpn_protocols: HashSet<HttpVersion>,
     pub ech_config: Option<Vec<u8>>,
     pub ipv4_hints: Vec<Ipv4Addr>,
     pub ipv6_hints: Vec<Ipv6Addr>,
@@ -293,7 +293,7 @@ impl ServiceInfo {
             .flat_map(|ip| {
                 // TODO: way around allocation?
                 let ech_config = self.ech_config.clone();
-                ConnectionAttemptProtocols::from_protocols(&self.alpn_protocols)
+                ConnectionAttemptHttpVersions::from_protocols(&self.alpn_protocols)
                     .into_iter()
                     .map(move |protocol| Endpoint {
                         address: SocketAddr::new(ip, port),
@@ -306,41 +306,39 @@ impl ServiceInfo {
     }
 }
 
-// TODO: Rename to HttpVersion
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Protocol {
+pub enum HttpVersion {
     H3,
     H2,
     H1,
 }
 
-// TODO: Rename to ConnectionAttemptHttpVersions
 /// Possible connection attempt protocol combinations.
 ///
 /// While on a QUIC connection attempts one can only use HTTP/3, on a TCP
 /// connection attempt one might either negotiate HTTP/2 or HTTP/1.1 via TLS
 /// ALPN.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ConnectionAttemptProtocols {
+pub enum ConnectionAttemptHttpVersions {
     H3,
     H2OrH1,
     H2,
     H1,
 }
 
-impl ConnectionAttemptProtocols {
-    /// [`Protocol::H2`] and [`Protocol::H1`] into [`ConnectionAttemptProtocols::H2OrH1`].
-    fn from_protocols(protocols: &HashSet<Protocol>) -> HashSet<ConnectionAttemptProtocols> {
+impl ConnectionAttemptHttpVersions {
+    /// [`HttpVersion::H2`] and [`HttpVersion::H1`] into [`ConnectionAttemptHttpVersions::H2OrH1`].
+    fn from_protocols(protocols: &HashSet<HttpVersion>) -> HashSet<ConnectionAttemptHttpVersions> {
         let mut combinations = HashSet::new();
-        if protocols.contains(&Protocol::H3) {
-            combinations.insert(ConnectionAttemptProtocols::H3);
+        if protocols.contains(&HttpVersion::H3) {
+            combinations.insert(ConnectionAttemptHttpVersions::H3);
         }
-        if protocols.contains(&Protocol::H2) && protocols.contains(&Protocol::H1) {
-            combinations.insert(ConnectionAttemptProtocols::H2OrH1);
-        } else if protocols.contains(&Protocol::H2) {
-            combinations.insert(ConnectionAttemptProtocols::H2);
-        } else if protocols.contains(&Protocol::H1) {
-            combinations.insert(ConnectionAttemptProtocols::H1);
+        if protocols.contains(&HttpVersion::H2) && protocols.contains(&HttpVersion::H1) {
+            combinations.insert(ConnectionAttemptHttpVersions::H2OrH1);
+        } else if protocols.contains(&HttpVersion::H2) {
+            combinations.insert(ConnectionAttemptHttpVersions::H2);
+        } else if protocols.contains(&HttpVersion::H1) {
+            combinations.insert(ConnectionAttemptHttpVersions::H1);
         }
         combinations
     }
@@ -437,7 +435,7 @@ pub enum IpPreference {
 pub struct AltSvc {
     pub host: Option<String>,
     pub port: Option<u16>,
-    pub protocol: Protocol,
+    pub protocol: HttpVersion,
 }
 
 // TODO: Allow user to provide alt-svc information from previous connections.
@@ -523,7 +521,7 @@ impl ConnectionAttempt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
     pub address: SocketAddr,
-    pub protocol: ConnectionAttemptProtocols,
+    pub protocol: ConnectionAttemptHttpVersions,
     pub ech_config: Option<Vec<u8>>,
 }
 
@@ -1076,7 +1074,7 @@ impl HappyEyeballs {
             .any(|a| a.state == ConnectionState::InProgress)
     }
 
-    fn connection_attempt_protocols(&self) -> HashSet<ConnectionAttemptProtocols> {
+    fn connection_attempt_protocols(&self) -> HashSet<ConnectionAttemptHttpVersions> {
         let mut protocols = HashSet::new();
 
         // Add protocols from DNS HTTPS records
@@ -1099,8 +1097,8 @@ impl HappyEyeballs {
 
         // If HTTPS DNS records didn't specify any protocols, default to HTTP/2, and HTTP/1.1.
         if protocols.is_empty() {
-            protocols.insert(Protocol::H2);
-            protocols.insert(Protocol::H1);
+            protocols.insert(HttpVersion::H2);
+            protocols.insert(HttpVersion::H1);
         }
 
         // Add protocols from alt-svc
@@ -1113,16 +1111,16 @@ impl HappyEyeballs {
         }
 
         if !self.network_config.http_versions.h3 {
-            protocols.remove(&Protocol::H3);
+            protocols.remove(&HttpVersion::H3);
         }
         if !self.network_config.http_versions.h2 {
-            protocols.remove(&Protocol::H2);
+            protocols.remove(&HttpVersion::H2);
         }
         if !self.network_config.http_versions.h1 {
-            protocols.remove(&Protocol::H1);
+            protocols.remove(&HttpVersion::H1);
         }
 
-        ConnectionAttemptProtocols::from_protocols(&protocols)
+        ConnectionAttemptHttpVersions::from_protocols(&protocols)
     }
 
     /// Get the ECH config from HTTPS DNS records for the current host.
