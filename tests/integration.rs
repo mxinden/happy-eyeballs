@@ -9,7 +9,6 @@ use happy_eyeballs::{
     Endpoint, HappyEyeballs, HttpVersions, Id, Input, IpPreference, NetworkConfig, Output,
     Protocol, RESOLUTION_DELAY,
 };
-use tracing_subscriber::{EnvFilter, util::SubscriberInitExt};
 
 const HOSTNAME: &str = "example.com";
 const PORT: u16 = 443;
@@ -266,13 +265,7 @@ fn setup() -> (Instant, HappyEyeballs) {
 }
 
 fn setup_with_config(config: NetworkConfig) -> (Instant, HappyEyeballs) {
-    let _ = tracing_subscriber::fmt()
-        // Use a more compact, abbreviated log format
-        .compact()
-        .with_env_filter(EnvFilter::from_default_env())
-        // Build the subscriber
-        .finish()
-        .try_init();
+    let _ = env_logger::builder().is_test(true).try_init();
 
     let now = Instant::now();
     let he = HappyEyeballs::new_with_network_config(HOSTNAME, PORT, config).unwrap();

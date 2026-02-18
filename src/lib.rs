@@ -49,8 +49,8 @@ use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
+use log::trace;
 use thiserror::Error;
-use tracing::{Level, instrument, trace};
 use url::Host;
 
 mod id;
@@ -306,6 +306,7 @@ impl ServiceInfo {
     }
 }
 
+// TODO: Rename to HttpVersion
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Protocol {
     H3,
@@ -313,6 +314,7 @@ pub enum Protocol {
     H1,
 }
 
+// TODO: Rename to ConnectionAttemptHttpVersions
 /// Possible connection attempt protocol combinations.
 ///
 /// While on a QUIC connection attempts one can only use HTTP/3, on a TCP
@@ -601,7 +603,6 @@ impl HappyEyeballs {
     }
 
     /// Create a new Happy Eyeballs state machine with custom network configuration
-    #[instrument(skip_all, level = Level::TRACE, fields(target = host), ret)]
     pub fn new_with_network_config(
         host: &str,
         port: u16,
@@ -617,14 +618,16 @@ impl HappyEyeballs {
                 Err(_) => return Err(ConstructorErrorInner::InvalidHost(e).into()),
             },
         };
-        Ok(Self {
+        let s = Self {
             id_generator: IdGenerator::new(),
             network_config,
             dns_queries: Vec::new(),
             connection_attempts: Vec::new(),
             host,
             port,
-        })
+        };
+        trace!("new_with_network_config: {:?}", s);
+        Ok(s)
     }
 
     /// Process an input event
@@ -632,9 +635,8 @@ impl HappyEyeballs {
     /// Updates internal state based on the input.
     ///
     /// After calling this, call [`HappyEyeballs::process_output`] to get any pending outputs.
-    #[instrument(skip_all, level = Level::TRACE, fields(target = %self.host))]
     pub fn process_input(&mut self, input: Input, now: Instant) {
-        trace!(input = ?input);
+        trace!("target={} input={:?}", self.host, input);
 
         match input {
             Input::DnsResult { id, result } => {
@@ -653,8 +655,13 @@ impl HappyEyeballs {
     ///
     /// The caller must call [`HappyEyeballs::process_output`] repeatedly
     /// until it returns [`None`] or [`Output::Timer`].
-    #[instrument(skip_all, level = Level::TRACE, fields(target = %self.host), ret)]
     pub fn process_output(&mut self, now: Instant) -> Option<Output> {
+        let output = self.process_output_inner(now);
+        trace!("target={} process_output: {:?}", self.host, output);
+        output
+    }
+
+    fn process_output_inner(&mut self, now: Instant) -> Option<Output> {
         // Check if we have any successful connection that requires canceling other attempts
         let output = self.cancel_remaining_attempts();
         if output.is_some() {
